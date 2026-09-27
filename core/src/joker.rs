@@ -16,7 +16,7 @@ static JOKER_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 /// How many jokers have real behavior. Kept in step with
 /// `JokerEffects::is_implemented` by a test.
 #[cfg(test)]
-const IMPLEMENTED_JOKER_COUNT: usize = 149;
+const IMPLEMENTED_JOKER_COUNT: usize = 150;
 
 /// The real game's own numbers for the jokers below, kept together so a
 /// value from the wiki can be checked against its neighbours at a glance.
@@ -1469,6 +1469,10 @@ impl JokerEffects for Jokers {
                 // scoring effect to register here.
                 vec![]
             }
+            Self::Perkeo(_) => {
+                // Fires in `Game::shop_end_effects`, when the shop is left.
+                vec![]
+            }
             // The blind-start group is driven by `Game::joker_blind_start`,
             // which runs before the deal, so these have no scoring hook.
             Self::RiffRaff(_)
@@ -1639,6 +1643,7 @@ impl JokerEffects for Jokers {
                 | Self::Hallucination(_)
                 | Self::Showman(_)
                 | Self::MrBones(_)
+                | Self::Perkeo(_)
                 | Self::CreditCard(_)
                 | Self::Blueprint(_)
                 | Self::Brainstorm(_)

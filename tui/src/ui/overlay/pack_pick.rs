@@ -113,15 +113,15 @@ fn item_info(content: &PackContent, w: u16) -> (String, Vec<Line<'static>>) {
     match content {
         PackContent::Joker(j) => (format!(" {} ", j.name()), joker_lines(j, w)),
         PackContent::Tarot(t) => {
-            let c = Consumable::Tarot(*t);
+            let c = Consumable::tarot(*t);
             (format!(" {} ", c.name()), consumable_lines(&c, w))
         }
         PackContent::Planet(p) => {
-            let c = Consumable::Planet(*p);
+            let c = Consumable::planet(*p);
             (format!(" {} ", c.name()), consumable_lines(&c, w))
         }
         PackContent::Spectral(s) => {
-            let c = Consumable::Spectral(*s);
+            let c = Consumable::spectral(*s);
             (format!(" {} ", c.name()), consumable_lines(&c, w))
         }
         PackContent::PlayingCard(card) => (

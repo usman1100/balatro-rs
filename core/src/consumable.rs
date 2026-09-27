@@ -1,1 +1,1 @@
-pub use balatro_types::Consumable;
+pub use balatro_types::{Consumable, ConsumableKind};

@@ -1,6 +1,6 @@
 use crate::app::{AppState, WidgetId};
 use crate::ui::overlay::centered_rect;
-use balatro_rs::consumable::Consumable;
+use balatro_rs::consumable::{Consumable, ConsumableKind};
 use balatro_rs::stage::Stage;
 use ratatui::{
     layout::Rect,
@@ -131,9 +131,9 @@ pub fn render(f: &mut Frame, app: &mut AppState, area: Rect, idx: usize) {
 }
 
 fn consumable_selection_info(app: &AppState, c: &Consumable) -> Option<(usize, usize, bool)> {
-    let (needed, max) = match c {
-        Consumable::Tarot(t) if t.requires_targets() => (t.min_targets(), t.max_targets()),
-        Consumable::Spectral(s) if s.requires_targets() => (s.min_targets(), s.max_targets()),
+    let (needed, max) = match c.kind {
+        ConsumableKind::Tarot(t) if t.requires_targets() => (t.min_targets(), t.max_targets()),
+        ConsumableKind::Spectral(s) if s.requires_targets() => (s.min_targets(), s.max_targets()),
         _ => return None,
     };
     if !matches!(app.game.stage, Stage::Blind(_)) {

@@ -72,8 +72,17 @@ pub(crate) fn joker_lines(joker: &Jokers, w: u16) -> Vec<Line<'static>> {
 pub(crate) fn consumable_lines(c: &Consumable, w: u16) -> Vec<Line<'static>> {
     let desc = c.description();
     let type_color = crate::ui::consumable_type_color(c);
-    let mut lines = vec![
-        Line::from(""),
+    let mut lines = vec![Line::from("")];
+    if c.is_negative() {
+        lines.push(Line::from(vec![
+            Span::raw("  Edition:  "),
+            Span::styled(
+                "Negative".to_string(),
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+    lines.extend([
         Line::from(vec![
             Span::raw("  Type:  "),
             Span::styled(c.type_label().to_string(), Style::default().fg(type_color)),
@@ -83,7 +92,7 @@ pub(crate) fn consumable_lines(c: &Consumable, w: u16) -> Vec<Line<'static>> {
             Span::styled(format!("${}", c.cost()), Style::default().fg(Color::Yellow)),
         ]),
         Line::from(""),
-    ];
+    ]);
     for word_line in wrap(&desc, w as usize - 4) {
         lines.push(Line::from(Span::styled(
             format!("  {}", word_line),

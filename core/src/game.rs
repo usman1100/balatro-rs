@@ -4,7 +4,7 @@ use crate::available::Available;
 use crate::boss::BossState;
 use crate::card::{card_display, Card, Edition, Enhancement, Seal, Suit, Value};
 use crate::config::{Config, RngMode};
-use crate::consumable::Consumable;
+use crate::consumable::{Consumable, ConsumableKind};
 use crate::deck::Deck;
 use crate::effect::{EffectRegistry, Effects, RuleFlag};
 use crate::error::{GameError, PlayHandError};
@@ -371,6 +371,19 @@ impl Game {
         self.config.consumable_slots + self.vouchers.consumable_slot_bonus()
     }
 
+    /// How many of the held consumables actually occupy a slot. A Negative
+    /// consumable does not: the real game raises the consumable card limit
+    /// by one when the edition is applied, which nets out to the card being
+    /// free to hold.
+    pub(crate) fn consumables_holding_slots(&self) -> usize {
+        self.consumables.iter().filter(|c| c.takes_a_slot()).count()
+    }
+
+    /// Whether a consumable can be added, given whether it needs a slot.
+    pub(crate) fn can_hold_consumable(&self, consumable: &Consumable) -> bool {
+        !consumable.takes_a_slot() || self.consumables_holding_slots() < self.consumable_slots()
+    }
+
     /// Hands per round — Grabber/Nacho Tong add, Hieroglyph subtracts.
     /// Never drops below one; a run with no hands is unplayable. The
     /// Needle overrides it entirely, rather than adjusting it.
@@ -502,6 +515,34 @@ impl Game {
             .any(|j| matches!(j, Jokers::Astronomer(_)))
     }
 
+    /// Jokers that fire when the shop is left rather than on a score.
+    /// Perkeo mints a Negative copy of a random held consumable here, which
+    /// is the only source of a Negative consumable core implements.
+    fn shop_end_effects(&mut self) {
+        if !self.jokers.iter().any(|j| matches!(j, Jokers::Perkeo(_))) {
+            return;
+        }
+        let Some(victim) = self.random_held_consumable() else {
+            return;
+        };
+        let negative = Consumable::negative(victim.kind);
+        // Slot-free, so this cannot overflow, but the check is cheap and
+        // keeps the invariant in one place.
+        if !self.can_hold_consumable(&negative) {
+            return;
+        }
+        self.consumables.push(negative);
+    }
+
+    /// A uniformly random held consumable, including Negative copies.
+    fn random_held_consumable(&mut self) -> Option<Consumable> {
+        if self.consumables.is_empty() {
+            return None;
+        }
+        let idx = self.backend.random_index(self.consumables.len());
+        self.consumables.get(idx).copied()
+    }
+
     /// A tag waiting to be collected, granted out of band by Diet Cola.
     pub(crate) fn grant_free_double_tag(&mut self) {
         self.pending_tags.push(Tag::Double);
@@ -574,19 +615,19 @@ impl Game {
     /// Certificate, Cartomancer, Chaotic and friends need a live tarot, so
     /// the helper they share.
     pub(crate) fn add_tarot(&mut self) {
-        if self.consumables.len() >= self.consumable_slots() {
+        let consumable = self.backend.roll_random_tarot(&[]);
+        if !self.can_hold_consumable(&consumable) {
             return;
         }
-        let consumable = self.backend.roll_random_tarot(&[]);
         self.consumables.push(consumable);
     }
 
     pub(crate) fn add_spectral(&mut self) {
-        if self.consumables.len() >= self.consumable_slots() {
+        let consumable = self.backend.roll_random_spectral(&[]);
+        if !self.can_hold_consumable(&consumable) {
             return;
         }
-        let consumed = self.backend.roll_random_spectral(&[]);
-        self.consumables.push(consumed);
+        self.consumables.push(consumable);
     }
 
     /// What the next reroll in a fresh shop costs, before the per-reroll
@@ -671,7 +712,7 @@ impl Game {
 
         let planetarium = self.planetarium.clone();
         for card in self.available.not_selected() {
-            if card.seal == Some(Seal::Blue) && self.consumables.len() < self.consumable_slots() {
+            if card.seal == Some(Seal::Blue) && self.consumables_holding_slots() < self.consumable_slots() {
                 let planet = self.backend.roll_random_planet(&planetarium, &[]);
                 self.consumables.push(planet);
             }
@@ -1015,12 +1056,12 @@ impl Game {
 
         // Check for purple seals
         for card in &discarded {
-            if card.seal == Some(Seal::Purple) && self.consumables.len() < self.consumable_slots() {
+            if card.seal == Some(Seal::Purple) && self.consumables_holding_slots() < self.consumable_slots() {
                 let excl: Vec<Tarot> = self
                     .consumables
                     .iter()
-                    .filter_map(|c| match c {
-                        Consumable::Tarot(t) => Some(*t),
+                    .filter_map(|c| match c.kind {
+                        ConsumableKind::Tarot(t) => Some(t),
                         _ => None,
                     })
                     .collect();
@@ -1291,7 +1332,7 @@ impl Game {
             let matching = self
                 .consumables
                 .iter()
-                .filter(|c| matches!(c, Consumable::Planet(p) if p.hand_rank() == hand.rank))
+                .filter(|c| matches!(c.kind, ConsumableKind::Planet(p) if p.hand_rank() == hand.rank))
                 .count();
             for _ in 0..matching {
                 let chips_before = self.chips;
@@ -1657,6 +1698,7 @@ impl Game {
         self.reroll_cost = self.base_reroll_cost();
         self.rerolls_this_shop = 0;
         self.stage = Stage::Shop();
+        self.shop_end_effects();
 
         // Tags fire between entering the shop and stocking it, because most
         // of them shape the shop: Coupon and D6 set flags, the Uncommon /
@@ -1848,7 +1890,7 @@ impl Game {
         if self.stage != Stage::Shop() {
             return Err(GameError::InvalidStage);
         }
-        if self.consumables.len() >= self.consumable_slots() {
+        if !self.can_hold_consumable(&consumable) {
             return Err(GameError::NoAvailableSlot);
         }
         let cost = self.shop.price(|c| self.price(c), consumable.cost());
@@ -1942,7 +1984,7 @@ impl Game {
         // Validate selection before removal so the consumable is not lost on error.
         // Hand-touching Tarot/Spectral can only be used while a real hand exists
         // (during Blind), a held consumable never draws a substitute hand from the deck.
-        if let Consumable::Tarot(t) = &consumable {
+        if let ConsumableKind::Tarot(t) = &consumable.kind {
             if t.requires_hand() {
                 if !self.stage.is_blind() {
                     return Err(GameError::InvalidAction);
@@ -1953,7 +1995,7 @@ impl Game {
                 }
             }
         }
-        if let Consumable::Spectral(s) = &consumable {
+        if let ConsumableKind::Spectral(s) = &consumable.kind {
             if s.requires_hand() {
                 if !self.stage.is_blind() {
                     return Err(GameError::InvalidAction);
@@ -1970,20 +2012,20 @@ impl Game {
             .position(|c| c == &consumable)
             .ok_or(GameError::InvalidAction)?;
         self.consumables.remove(i);
-        match consumable {
-            Consumable::Planet(planet) => {
+        match consumable.kind {
+            ConsumableKind::Planet(planet) => {
                 self.planets_used_this_run += 1;
                 self.planetarium.level_up(planet.hand_rank());
-                self.last_consumable_used = Some(Consumable::Planet(planet));
+                self.last_consumable_used = Some(Consumable::planet(planet));
             }
-            Consumable::Tarot(t) => {
+            ConsumableKind::Tarot(t) => {
                 t.apply(self)?;
                 if t != Tarot::Fool {
                     self.tarots_used_this_run += 1;
-                    self.last_consumable_used = Some(Consumable::Tarot(t));
+                    self.last_consumable_used = Some(Consumable::tarot(t));
                 }
             }
-            Consumable::Spectral(s) => {
+            ConsumableKind::Spectral(s) => {
                 // Fool only ever copies the last Tarot or Planet used, never a Spectral.
                 s.apply(self)?;
             }
@@ -2006,7 +2048,7 @@ impl Game {
         }
         t.apply(self)?;
         if t != Tarot::Fool {
-            self.last_consumable_used = Some(Consumable::Tarot(t));
+            self.last_consumable_used = Some(Consumable::tarot(t));
         }
         self.stage = prev;
         // Only reachable via a pack pick now, finish_pack handles hand cleanup
@@ -4307,7 +4349,7 @@ mod tests {
         assert_eq!(g.consumables.len(), 0);
         g.discard_selected().expect("can discard");
         assert_eq!(g.consumables.len(), 1);
-        assert!(matches!(g.consumables[0], Consumable::Tarot(_)));
+        assert!(matches!(g.consumables[0].kind, ConsumableKind::Tarot(_)));
     }
 
     #[test]
@@ -4345,7 +4387,7 @@ mod tests {
         g.play_selected().expect("can play selected");
 
         assert_eq!(g.consumables.len(), 1);
-        assert!(matches!(g.consumables[0], Consumable::Planet(_)));
+        assert!(matches!(g.consumables[0].kind, ConsumableKind::Planet(_)));
     }
 
     #[test]
@@ -4681,11 +4723,11 @@ mod tests {
         g.blind = Some(Blind::Small);
         g.deal();
         // no cards selected — Magician needs at least 1
-        g.consumables = vec![Consumable::Tarot(Tarot::Magician)];
-        let res = g.use_consumable(Consumable::Tarot(Tarot::Magician));
+        g.consumables = vec![Consumable::tarot(Tarot::Magician)];
+        let res = g.use_consumable(Consumable::tarot(Tarot::Magician));
         assert!(matches!(res, Err(GameError::InvalidAction)));
         assert_eq!(g.consumables.len(), 1);
-        assert!(g.consumables.contains(&Consumable::Tarot(Tarot::Magician)));
+        assert!(g.consumables.contains(&Consumable::tarot(Tarot::Magician)));
     }
 
     #[test]
@@ -4699,8 +4741,8 @@ mod tests {
         let cards = g.available.cards();
         g.available.select_card(cards[0]).unwrap();
         g.available.select_card(cards[1]).unwrap();
-        g.consumables = vec![Consumable::Tarot(Tarot::Lovers)];
-        let res = g.use_consumable(Consumable::Tarot(Tarot::Lovers));
+        g.consumables = vec![Consumable::tarot(Tarot::Lovers)];
+        let res = g.use_consumable(Consumable::tarot(Tarot::Lovers));
         assert!(matches!(res, Err(GameError::InvalidAction)));
         assert_eq!(g.consumables.len(), 1);
     }
@@ -4806,7 +4848,7 @@ mod tests {
         g.start();
         g.stage = Stage::Shop();
         g.money = 0;
-        let c = Consumable::Planet(Planets::Mercury);
+        let c = Consumable::planet(Planets::Mercury);
         let sell_value = c.sell_value();
         g.consumables.push(c);
         assert_eq!(g.consumables.len(), 1);
@@ -4831,7 +4873,7 @@ mod tests {
         g.start();
         g.stage = Stage::End(crate::stage::End::Win);
         g.consumables
-            .push(Consumable::Tarot(crate::tarot::Tarot::Fool));
+            .push(Consumable::tarot(crate::tarot::Tarot::Fool));
         let res = g.sell_consumable(0);
         assert!(matches!(res, Err(GameError::InvalidStage)));
     }
@@ -4860,7 +4902,7 @@ mod tests {
         g.start();
         g.stage = Stage::TarotHand(Tarot::Magician);
         g.money = 0;
-        let c = Consumable::Planet(Planets::Mercury);
+        let c = Consumable::planet(Planets::Mercury);
         let sell_value = c.sell_value();
         g.consumables.push(c);
 
@@ -5809,12 +5851,12 @@ mod tests {
         assert_eq!(g.calc_score(hand.clone()), 60);
 
         // Mercury is OnePair's planet, so Observatory applies: mult 2 -> 3.
-        g.consumables.push(Consumable::Planet(Planets::Mercury));
+        g.consumables.push(Consumable::planet(Planets::Mercury));
         g.vouchers.redeem(Voucher::Observatory);
         assert_eq!(g.calc_score(hand.clone()), 90);
 
         // A planet for a different hand does nothing.
-        g.consumables = vec![Consumable::Planet(Planets::Jupiter)];
+        g.consumables = vec![Consumable::planet(Planets::Jupiter)];
         assert_eq!(g.calc_score(hand), 60);
     }
 
@@ -6054,6 +6096,160 @@ mod tests {
         assert_eq!(g.money, -20, "clamped at the floor");
     }
 
+
+    // --- Negative consumables and Perkeo ---
+    use crate::planet::Planets;
+    use crate::spectral::Spectral;
+
+    /// A game in the Shop holding `consumables`, ignoring slots.
+    fn shop_holding_consumables(consumables: Vec<Consumable>) -> Game {
+        let mut g = game_in_shop_with_tag(Tag::Double);
+        g.consumables = consumables;
+        g
+    }
+
+    fn negative_tarot() -> Consumable {
+        Consumable::negative(ConsumableKind::Tarot(Tarot::HangedMan))
+    }
+
+    #[test]
+    fn test_perkeo_mints_a_negative_copy_when_the_shop_is_left() {
+        let mut g = shop_holding_consumables(vec![Consumable::tarot(Tarot::HangedMan)]);
+        g.jokers = vec![Jokers::Perkeo(Default::default())];
+        g.shop_end_effects();
+        assert_eq!(g.consumables.len(), 2);
+        let copy = g.consumables[1];
+        assert!(copy.is_negative());
+        assert_eq!(copy.kind, g.consumables[0].kind, "a copy of the same card");
+    }
+
+    #[test]
+    fn test_perkeo_copies_any_held_consumable() {
+        for held in [
+            Consumable::tarot(Tarot::Death),
+            Consumable::planet(Planets::Mars),
+            Consumable::spectral(Spectral::Ankh),
+        ] {
+            let mut g = shop_holding_consumables(vec![held]);
+            g.jokers = vec![Jokers::Perkeo(Default::default())];
+            g.shop_end_effects();
+            assert_eq!(g.consumables.len(), 2, "{held:?} was copied");
+            assert!(g.consumables[1].is_negative());
+            assert_eq!(g.consumables[1].kind, held.kind);
+        }
+    }
+
+    #[test]
+    fn test_perkeo_needs_a_consumable_to_copy() {
+        let mut g = shop_holding_consumables(vec![]);
+        g.jokers = vec![Jokers::Perkeo(Default::default())];
+        g.shop_end_effects();
+        assert!(g.consumables.is_empty(), "nothing to copy is not an error");
+    }
+
+    #[test]
+    fn test_perkeo_does_nothing_without_the_joker() {
+        let mut g = shop_holding_consumables(vec![Consumable::tarot(Tarot::HangedMan)]);
+        g.shop_end_effects();
+        assert_eq!(g.consumables.len(), 1);
+    }
+
+    #[test]
+    fn test_a_negative_consumable_is_slot_free() {
+        let mut g = shop_holding_consumables(vec![]);
+        g.config.consumable_slots = 1;
+        g.consumables.push(Consumable::tarot(Tarot::Death));
+        assert_eq!(g.consumables_holding_slots(), 1);
+        assert!(
+            !g.can_hold_consumable(&Consumable::tarot(Tarot::Tower)),
+            "the only slot is taken"
+        );
+        assert!(
+            g.can_hold_consumable(&negative_tarot()),
+            "a Negative still fits"
+        );
+        g.consumables.push(negative_tarot());
+        assert_eq!(g.consumables_holding_slots(), 1, "and takes no slot");
+        assert_eq!(g.consumables.len(), 2);
+    }
+
+    #[test]
+    fn test_a_negative_consumable_costs_five_more_than_its_base() {
+        let base = Consumable::tarot(Tarot::HangedMan);
+        let negative = negative_tarot();
+        assert_eq!(negative.cost(), base.cost() + 5);
+        assert!(negative.sell_value() > base.sell_value());
+    }
+
+    #[test]
+    fn test_a_negative_consumable_does_not_block_its_base_from_a_shop() {
+        // Holding a Negative Hanged Man and being offered a base Hanged Man
+        // is the point of a Negative copy, so the exclusion list skips it.
+        let g = shop_holding_consumables(vec![negative_tarot()]);
+        let mut tarots: Vec<Tarot> = Vec::new();
+        let mut planets: Vec<Planets> = Vec::new();
+        for c in &g.consumables {
+            crate::shop::exclude_held(c, &mut tarots, &mut planets);
+        }
+        assert!(
+            tarots.is_empty(),
+            "a Negative copy must not exclude its centre, got {tarots:?}"
+        );
+    }
+
+    #[test]
+    fn test_a_base_consumable_does_block_its_centre() {
+        let g = shop_holding_consumables(vec![Consumable::tarot(Tarot::HangedMan)]);
+        let mut tarots: Vec<Tarot> = Vec::new();
+        let mut planets: Vec<Planets> = Vec::new();
+        for c in &g.consumables {
+            crate::shop::exclude_held(c, &mut tarots, &mut planets);
+        }
+        assert_eq!(tarots, vec![Tarot::HangedMan]);
+    }
+
+    #[test]
+    fn test_a_negative_consumable_is_usable_and_sellable() {
+        let mut g = shop_holding_consumables(vec![negative_tarot()]);
+        g.money = 100;
+        let before = g.consumables.len();
+        g.sell_consumable(0).expect("sell");
+        assert_eq!(g.consumables.len(), before - 1);
+        assert!(
+            g.money > 100,
+            "and it sells for more than a base one, got {}",
+            g.money
+        );
+    }
+
+    #[test]
+    fn test_a_negative_consumable_keeps_its_effect_when_used() {
+        // Mars is Four of a Kind's planet.
+        let negative = Consumable::negative(ConsumableKind::Planet(Planets::Mars));
+        let mut g = shop_holding_consumables(vec![negative]);
+        g.blind = Some(Blind::Small);
+        g.stage = Stage::Blind(Blind::Small);
+        let before = g.planetarium.level(HandRank::FourOfAKind).level;
+        g.use_consumable(negative).expect("use a Negative planet");
+        assert_eq!(
+            g.planetarium.level(HandRank::FourOfAKind).level,
+            before + 1,
+            "a Negative planet still levels the hand"
+        );
+    }
+
+    #[test]
+    fn test_negative_consumables_survive_a_save_load_round_trip() {
+        let g = shop_holding_consumables(vec![
+            negative_tarot(),
+            Consumable::tarot(Tarot::HangedMan),
+        ]);
+        let json = g.to_json().expect("serialize");
+        let loaded = Game::from_json(&json).expect("deserialize");
+        assert_eq!(loaded.consumables, g.consumables);
+        assert!(loaded.consumables[0].is_negative());
+        assert!(!loaded.consumables[1].is_negative());
+    }
 
     // --- boss blind modifiers ---
 

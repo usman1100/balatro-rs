@@ -152,7 +152,7 @@ impl TarotEffect for Tarot {
                     .consumables
                     .iter()
                     .filter_map(|c| {
-                        if let crate::consumable::Consumable::Tarot(t) = c {
+                        if let crate::consumable::ConsumableKind::Tarot(t) = &c.kind {
                             Some(*t)
                         } else {
                             None
@@ -164,7 +164,7 @@ impl TarotEffect for Tarot {
                         break;
                     }
                     let tarot = game.backend.roll_random_tarot(&excl);
-                    if let crate::consumable::Consumable::Tarot(t) = &tarot {
+                    if let crate::consumable::ConsumableKind::Tarot(t) = &tarot.kind {
                         excl.push(*t);
                     }
                     game.consumables.push(tarot);
@@ -344,11 +344,11 @@ mod tests {
 
         let mut g = game_in_blind();
         g.config.consumable_slots = 2;
-        g.last_consumable_used = Some(Consumable::Planet(Planets::Mercury));
+        g.last_consumable_used = Some(Consumable::planet(Planets::Mercury));
 
         Tarot::Fool.apply(&mut g).unwrap();
         assert_eq!(g.consumables.len(), 1);
-        assert_eq!(g.consumables[0], Consumable::Planet(Planets::Mercury));
+        assert_eq!(g.consumables[0], Consumable::planet(Planets::Mercury));
     }
 
     #[test]

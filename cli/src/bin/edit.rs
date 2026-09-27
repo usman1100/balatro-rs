@@ -161,9 +161,9 @@ fn main() -> Result<()> {
             }
             game.jokers.push(joker);
         }
-        Command::AddTarot { name } => game.consumables.push(Consumable::Tarot(name)),
-        Command::AddPlanet { name } => game.consumables.push(Consumable::Planet(name)),
-        Command::AddSpectral { name } => game.consumables.push(Consumable::Spectral(name)),
+        Command::AddTarot { name } => game.consumables.push(Consumable::tarot(name)),
+        Command::AddPlanet { name } => game.consumables.push(Consumable::planet(name)),
+        Command::AddSpectral { name } => game.consumables.push(Consumable::spectral(name)),
         Command::ClearConsumables => game.consumables.clear(),
         Command::ClearDeck => {
             game.deck = Deck::new();

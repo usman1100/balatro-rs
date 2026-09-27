@@ -17,7 +17,7 @@ pub mod voucher;
 pub use ante::Ante;
 pub use blind::{Blind, BossBlind};
 pub use card::{Card, Edition, Enhancement, Seal, Suit, Value};
-pub use consumable::Consumable;
+pub use consumable::{Consumable, ConsumableKind};
 pub use deck::DeckVariant;
 pub use joker::{Categories, Jokers, Rarity, Stickers};
 pub use named::Named;

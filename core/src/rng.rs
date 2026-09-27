@@ -1,5 +1,5 @@
 use crate::card::Card;
-use crate::consumable::Consumable;
+use crate::consumable::{Consumable, ConsumableKind};
 use crate::deck::Deck;
 use crate::joker::Jokers;
 use crate::pack::{Pack, PackCategory, PackContent, PackSize};
@@ -368,7 +368,7 @@ impl RngBackend for FastBackend {
         let pick = *all
             .choose(&mut self.rng)
             .expect("Spectral pool is never empty");
-        Consumable::Spectral(pick)
+        Consumable::spectral(pick)
     }
 
     fn roll_random_hand(&mut self) -> HandRank {
@@ -509,10 +509,10 @@ fn seed_joker_with_id(mut j: Jokers, rng: &mut impl Rng) -> Jokers {
 /// `Consumable` may carry Soul/Black Hole (a Spectral) even from a
 /// nominally Tarot/Planet draw.
 fn consumable_to_pack_content(c: Consumable) -> PackContent {
-    match c {
-        Consumable::Tarot(t) => PackContent::Tarot(t),
-        Consumable::Planet(p) => PackContent::Planet(p),
-        Consumable::Spectral(s) => PackContent::Spectral(s),
+    match c.kind {
+        ConsumableKind::Tarot(t) => PackContent::Tarot(t),
+        ConsumableKind::Planet(p) => PackContent::Planet(p),
+        ConsumableKind::Spectral(s) => PackContent::Spectral(s),
     }
 }
 

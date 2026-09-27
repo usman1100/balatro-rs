@@ -1,7 +1,7 @@
 use crate::action::{Action, MoveDirection, SortBy};
 use crate::card::{Card, Edition};
 use crate::hand::SelectHand;
-use crate::consumable::Consumable;
+use crate::consumable::{Consumable, ConsumableKind};
 use crate::game::Game;
 use balatro_types::BossBlind;
 use crate::pack::PackContent;
@@ -210,7 +210,7 @@ impl Game {
         self.shop.gen_moves_buy_consumable(
             self.spendable_balance(),
             self.consumable_slots(),
-            self.consumables.len(),
+            self.consumables_holding_slots(),
             &self.vouchers,
         )
     }
@@ -230,10 +230,10 @@ impl Game {
         // the hand without needing a card selected (Sigil, Familiar, ...),
         // and they are gated the same way. This is the predicate
         // `use_consumable` validates against.
-        let (min_targets, max_targets, requires_hand) = match consumable {
-            Consumable::Planet(_) => return true,
-            Consumable::Tarot(t) => (t.min_targets(), t.max_targets(), t.requires_hand()),
-            Consumable::Spectral(s) => (s.min_targets(), s.max_targets(), s.requires_hand()),
+        let (min_targets, max_targets, requires_hand) = match consumable.kind {
+            ConsumableKind::Planet(_) => return true,
+            ConsumableKind::Tarot(t) => (t.min_targets(), t.max_targets(), t.requires_hand()),
+            ConsumableKind::Spectral(s) => (s.min_targets(), s.max_targets(), s.requires_hand()),
         };
         if !requires_hand {
             return true;
@@ -684,7 +684,7 @@ impl Game {
         if self.stage != Stage::Shop() {
             return;
         }
-        if self.consumables.len() >= self.consumable_slots() {
+        if self.consumables_holding_slots() >= self.consumable_slots() {
             return;
         }
         self.shop

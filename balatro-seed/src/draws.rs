@@ -252,10 +252,10 @@ impl Instance {
             && (self.params.showman || !self.is_locked(&Spectral::Soul))
             && self.random(NodeId::SoulTarot(ante)) > 0.997
         {
-            return Consumable::Spectral(Spectral::Soul);
+            return Consumable::spectral(Spectral::Soul);
         }
         let tarot = self.randchoice_typed(NodeId::Tarot { source, ante }, &pools::TAROTS_POOL);
-        Consumable::Tarot(tarot)
+        Consumable::tarot(tarot)
     }
 
     /// `functions.hpp::nextPlanet`. Can return `Black Hole` (a Spectral
@@ -265,10 +265,10 @@ impl Instance {
             && (self.params.showman || !self.is_locked(&Spectral::BlackHole))
             && self.random(NodeId::SoulPlanet(ante)) > 0.997
         {
-            return Consumable::Spectral(Spectral::BlackHole);
+            return Consumable::spectral(Spectral::BlackHole);
         }
         let planet = self.randchoice_typed(NodeId::Planet { source, ante }, &pools::PLANETS_POOL);
-        Consumable::Planet(planet)
+        Consumable::planet(planet)
     }
 
     /// `functions.hpp::nextSpectral`. Soul and Black Hole both draw from the
@@ -287,12 +287,12 @@ impl Instance {
                 forced = Some(Spectral::BlackHole);
             }
             if let Some(s) = forced {
-                return Consumable::Spectral(s);
+                return Consumable::spectral(s);
             }
         }
         let spectral =
             self.randchoice_typed(NodeId::Spectral { source, ante }, &pools::SPECTRALS_POOL);
-        Consumable::Spectral(spectral)
+        Consumable::spectral(spectral)
     }
 
     /// `source` selects a forced rarity for a few callers ("sou" =

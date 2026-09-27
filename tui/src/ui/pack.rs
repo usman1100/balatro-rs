@@ -235,14 +235,14 @@ pub fn inspect_target_for_cursor(app: &AppState) -> Option<InspectTarget> {
     Some(match content {
         PackContent::Joker(j) => InspectTarget::Joker(j.clone()),
         PackContent::Tarot(t) => {
-            InspectTarget::Consumable(balatro_rs::consumable::Consumable::Tarot(*t))
+            InspectTarget::Consumable(balatro_rs::consumable::Consumable::tarot(*t))
         }
         PackContent::Planet(p) => {
-            InspectTarget::Consumable(balatro_rs::consumable::Consumable::Planet(*p))
+            InspectTarget::Consumable(balatro_rs::consumable::Consumable::planet(*p))
         }
         PackContent::PlayingCard(c) => InspectTarget::Card(*c),
         PackContent::Spectral(s) => {
-            InspectTarget::Consumable(balatro_rs::consumable::Consumable::Spectral(*s))
+            InspectTarget::Consumable(balatro_rs::consumable::Consumable::spectral(*s))
         }
     })
 }

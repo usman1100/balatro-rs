@@ -14,7 +14,7 @@ pub mod spectral;
 pub mod tarot;
 
 use crate::app::AppState;
-use balatro_rs::consumable::Consumable;
+use balatro_rs::consumable::{Consumable, ConsumableKind};
 use balatro_rs::rank::HandRank;
 use balatro_rs::stage::Stage;
 use ratatui::style::Color;
@@ -91,10 +91,10 @@ pub(super) fn hand_rank_name(rank: HandRank) -> &'static str {
 /// is drawn (shop, owned strip, use/sell dialog, inspect popup) so they
 /// don't drift out of sync with each other.
 pub(super) fn consumable_type_color(c: &Consumable) -> Color {
-    match c {
-        Consumable::Tarot(_) => Color::Yellow, // gold
-        Consumable::Planet(_) => Color::Blue,
-        Consumable::Spectral(_) => Color::Cyan,
+    match c.kind {
+        ConsumableKind::Tarot(_) => Color::Yellow, // gold
+        ConsumableKind::Planet(_) => Color::Blue,
+        ConsumableKind::Spectral(_) => Color::Cyan,
     }
 }
 

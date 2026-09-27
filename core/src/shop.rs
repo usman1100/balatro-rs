@@ -1,6 +1,6 @@
 use crate::action::Action;
 use crate::card::{Card, Edition, Enhancement, Seal, Suit, Value};
-use crate::consumable::Consumable;
+use crate::consumable::{Consumable, ConsumableKind};
 use crate::error::GameError;
 use crate::joker::{jokers_by_rarity, Jokers, Rarity};
 use crate::pack::{Pack, PackCategory, PackContent, PackSize};
@@ -131,7 +131,7 @@ impl Shop {
             .held_consumables
             .iter()
             .filter_map(|c| {
-                if let Consumable::Tarot(t) = c {
+                if let ConsumableKind::Tarot(t) = &c.kind {
                     Some(*t)
                 } else {
                     None
@@ -142,7 +142,7 @@ impl Shop {
             .held_consumables
             .iter()
             .filter_map(|c| {
-                if let Consumable::Planet(p) = c {
+                if let ConsumableKind::Planet(p) = &c.kind {
                     Some(*p)
                 } else {
                     None
@@ -158,11 +158,7 @@ impl Shop {
                     self.jokers.push(joker);
                 }
                 GeneratedItem::Consumable(c) => {
-                    match &c {
-                        Consumable::Tarot(t) => excl_tarots.push(*t),
-                        Consumable::Planet(p) => excl_planets.push(*p),
-                        Consumable::Spectral(_) => {}
-                    }
+                    exclude_held(&c, &mut excl_tarots, &mut excl_planets);
                     self.consumables.push(c);
                 }
                 GeneratedItem::PlayingCard(card) => self.cards.push(card),
@@ -220,11 +216,7 @@ impl Shop {
         let mut excl_tarots: Vec<Tarot> = Vec::new();
         let mut excl_planets: Vec<Planets> = Vec::new();
         for c in ctx.held_consumables.iter().chain(self.consumables.iter()) {
-            match c {
-                Consumable::Tarot(t) => excl_tarots.push(*t),
-                Consumable::Planet(p) => excl_planets.push(*p),
-                Consumable::Spectral(_) => {}
-            }
+            exclude_held(c, &mut excl_tarots, &mut excl_planets);
         }
 
         for _ in filled..ctx.card_slots() {
@@ -235,11 +227,7 @@ impl Shop {
                     self.jokers.push(joker);
                 }
                 GeneratedItem::Consumable(c) => {
-                    match &c {
-                        Consumable::Tarot(t) => excl_tarots.push(*t),
-                        Consumable::Planet(p) => excl_planets.push(*p),
-                        Consumable::Spectral(_) => {}
-                    }
+                    exclude_held(&c, &mut excl_tarots, &mut excl_planets);
                     self.consumables.push(c);
                 }
                 GeneratedItem::PlayingCard(card) => self.cards.push(card),
@@ -359,7 +347,12 @@ impl Shop {
         held: usize,
         vouchers: &Vouchers,
     ) -> Option<impl Iterator<Item = Action>> {
-        if self.consumables.is_empty() || held >= consumable_slots {
+        if self.consumables.is_empty() {
+            return None;
+        }
+        // A Negative consumable is slot-free, so it is still offerable when
+        // the slots are full.
+        if held >= consumable_slots && self.consumables.iter().all(|c| c.takes_a_slot()) {
             return None;
         }
         let discount = vouchers.discount_pct();
@@ -423,6 +416,26 @@ impl Shop {
             return None;
         }
         Some(affordable.into_iter())
+    }
+}
+
+/// Records a held consumable's centre so the shop doesn't re-offer it.
+///
+/// A Negative copy deliberately does *not* exclude: holding a Negative
+/// Hanged Man and then being offered a base Hanged Man is the entire point
+/// of the Negativer, and of Perkeo minting one. The real game's shop
+/// exclusion builds its list from held card centres, which a Negative copy
+/// shares, so this is the one place the reading is a judgement call rather
+/// than a transcription — the 1.0.0 dump doesn't contain the shop
+/// generation function.
+pub(crate) fn exclude_held(c: &Consumable, tarots: &mut Vec<Tarot>, planets: &mut Vec<Planets>) {
+    if c.is_negative() {
+        return;
+    }
+    match c.kind {
+        ConsumableKind::Tarot(t) => tarots.push(t),
+        ConsumableKind::Planet(p) => planets.push(p),
+        ConsumableKind::Spectral(_) => {}
     }
 }
 
@@ -621,7 +634,7 @@ impl ConsumableGenerator {
         exclude: &[Planets],
         rng: &mut impl Rng,
     ) -> Consumable {
-        Consumable::Planet(self.gen_planet(planetarium, exclude, rng))
+        Consumable::planet(self.gen_planet(planetarium, exclude, rng))
     }
 
     fn gen_tarot(&self, exclude: &[Tarot], rng: &mut impl Rng) -> Tarot {
@@ -637,7 +650,7 @@ impl ConsumableGenerator {
     }
 
     pub(crate) fn gen_tarot_consumable(&self, exclude: &[Tarot], rng: &mut impl Rng) -> Consumable {
-        Consumable::Tarot(self.gen_tarot(exclude, rng))
+        Consumable::tarot(self.gen_tarot(exclude, rng))
     }
 }
 
@@ -827,7 +840,7 @@ mod tests {
     #[test]
     fn test_shop_buy_consumable() {
         let mut shop = Shop::new();
-        shop.consumables = vec![Consumable::Planet(Planets::Mercury)];
+        shop.consumables = vec![Consumable::planet(Planets::Mercury)];
         assert_eq!(shop.consumables.len(), 1);
         let c1 = shop.consumables[0].clone();
         shop.buy_consumable(&c1).expect("buy consumable");
@@ -854,7 +867,7 @@ mod tests {
         let gen = ConsumableGenerator::new();
         for _ in 0..500 {
             let c = gen.gen_planet_consumable(&planetarium, &[], &mut rand::thread_rng());
-            let Consumable::Planet(planet) = c else {
+            let ConsumableKind::Planet(planet) = c.kind else {
                 continue;
             };
             assert!(

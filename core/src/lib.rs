@@ -37,7 +37,7 @@ pub mod voucher;
 #[cfg(test)]
 mod tests {
     use crate::action::Action;
-    use crate::consumable::Consumable;
+    use crate::consumable::{Consumable, ConsumableKind};
     use crate::stage::{Blind, End};
     use crate::error::GameError;
     use crate::game::Game;
@@ -64,8 +64,8 @@ mod tests {
         g.start();
         g.money = 100;
         g.stage = Stage::Shop();
-        g.shop.consumables = vec![Consumable::Planet(Planets::Mercury)];
-        g.handle_action(Action::BuyConsumable(Consumable::Planet(Planets::Mercury)))
+        g.shop.consumables = vec![Consumable::planet(Planets::Mercury)];
+        g.handle_action(Action::BuyConsumable(Consumable::planet(Planets::Mercury)))
             .unwrap();
         assert_eq!(g.consumables.len(), 1);
         assert_eq!(g.money, 97);
@@ -77,9 +77,9 @@ mod tests {
         let mut g = Game::default();
         g.start();
         g.stage = Stage::Shop();
-        g.consumables = vec![Consumable::Planet(Planets::Mercury)];
+        g.consumables = vec![Consumable::planet(Planets::Mercury)];
         let before = g.planetarium.level(HandRank::OnePair);
-        g.handle_action(Action::UseConsumable(Consumable::Planet(Planets::Mercury)))
+        g.handle_action(Action::UseConsumable(Consumable::planet(Planets::Mercury)))
             .unwrap();
         assert!(g.consumables.is_empty());
         let after = g.planetarium.level(HandRank::OnePair);
@@ -92,9 +92,9 @@ mod tests {
         let mut g = Game::default();
         g.start();
         g.stage = Stage::PostBlind();
-        g.consumables = vec![Consumable::Planet(Planets::Jupiter)];
+        g.consumables = vec![Consumable::planet(Planets::Jupiter)];
         let before = g.planetarium.level(HandRank::Flush);
-        g.handle_action(Action::UseConsumable(Consumable::Planet(Planets::Jupiter)))
+        g.handle_action(Action::UseConsumable(Consumable::planet(Planets::Jupiter)))
             .unwrap();
         assert!(g.consumables.is_empty());
         let after = g.planetarium.level(HandRank::Flush);
@@ -109,11 +109,11 @@ mod tests {
         g.money = 100;
         g.stage = Stage::Shop();
         g.consumables = vec![
-            Consumable::Planet(Planets::Pluto),
-            Consumable::Planet(Planets::Mercury),
+            Consumable::planet(Planets::Pluto),
+            Consumable::planet(Planets::Mercury),
         ];
-        g.shop.consumables = vec![Consumable::Planet(Planets::Venus)];
-        let res = g.handle_action(Action::BuyConsumable(Consumable::Planet(Planets::Venus)));
+        g.shop.consumables = vec![Consumable::planet(Planets::Venus)];
+        let res = g.handle_action(Action::BuyConsumable(Consumable::planet(Planets::Venus)));
         assert!(matches!(res, Err(GameError::NoAvailableSlot)));
     }
 
@@ -123,8 +123,8 @@ mod tests {
         g.start();
         g.money = 0;
         g.stage = Stage::Shop();
-        g.shop.consumables = vec![Consumable::Planet(Planets::Mercury)];
-        let res = g.handle_action(Action::BuyConsumable(Consumable::Planet(Planets::Mercury)));
+        g.shop.consumables = vec![Consumable::planet(Planets::Mercury)];
+        let res = g.handle_action(Action::BuyConsumable(Consumable::planet(Planets::Mercury)));
         assert!(matches!(res, Err(GameError::InvalidBalance)));
     }
 
@@ -133,9 +133,9 @@ mod tests {
         let mut g = Game::default();
         g.start();
         g.stage = Stage::Blind(crate::stage::Blind::Small);
-        g.consumables = vec![Consumable::Planet(Planets::Mercury)];
+        g.consumables = vec![Consumable::planet(Planets::Mercury)];
         let before = g.planetarium.level(HandRank::OnePair);
-        let res = g.handle_action(Action::UseConsumable(Consumable::Planet(Planets::Mercury)));
+        let res = g.handle_action(Action::UseConsumable(Consumable::planet(Planets::Mercury)));
         assert!(res.is_ok());
         assert_eq!(
             g.planetarium.level(HandRank::OnePair).chips,
@@ -147,9 +147,9 @@ mod tests {
     fn test_use_consumable_valid_in_preblind() {
         let mut g = Game::default();
         g.start();
-        g.consumables = vec![Consumable::Planet(Planets::Saturn)];
+        g.consumables = vec![Consumable::planet(Planets::Saturn)];
         let before = g.planetarium.level(HandRank::Straight);
-        let res = g.handle_action(Action::UseConsumable(Consumable::Planet(Planets::Saturn)));
+        let res = g.handle_action(Action::UseConsumable(Consumable::planet(Planets::Saturn)));
         assert!(res.is_ok());
         assert_eq!(
             g.planetarium.level(HandRank::Straight).chips,
@@ -162,8 +162,8 @@ mod tests {
         let mut g = Game::default();
         g.start();
         g.stage = Stage::End(crate::stage::End::Win);
-        g.consumables = vec![Consumable::Planet(Planets::Mercury)];
-        let res = g.handle_action(Action::UseConsumable(Consumable::Planet(Planets::Mercury)));
+        g.consumables = vec![Consumable::planet(Planets::Mercury)];
+        let res = g.handle_action(Action::UseConsumable(Consumable::planet(Planets::Mercury)));
         assert!(matches!(res, Err(GameError::InvalidAction)));
     }
 
@@ -173,9 +173,9 @@ mod tests {
         g.start();
         g.money = 100;
         g.stage = Stage::Shop();
-        g.shop.consumables = vec![Consumable::Planet(Planets::Mercury)];
+        g.shop.consumables = vec![Consumable::planet(Planets::Mercury)];
         let actions: Vec<Action> = g.gen_actions().collect();
-        assert!(actions.contains(&Action::BuyConsumable(Consumable::Planet(Planets::Mercury))));
+        assert!(actions.contains(&Action::BuyConsumable(Consumable::planet(Planets::Mercury))));
     }
 
     #[test]
@@ -183,9 +183,9 @@ mod tests {
         let mut g = Game::default();
         g.start();
         g.stage = Stage::Shop();
-        g.consumables = vec![Consumable::Planet(Planets::Earth)];
+        g.consumables = vec![Consumable::planet(Planets::Earth)];
         let actions: Vec<Action> = g.gen_actions().collect();
-        assert!(actions.contains(&Action::UseConsumable(Consumable::Planet(Planets::Earth))));
+        assert!(actions.contains(&Action::UseConsumable(Consumable::planet(Planets::Earth))));
     }
 
     #[test]
@@ -193,7 +193,7 @@ mod tests {
         let mut g = Game::default();
         g.start();
         g.stage = Stage::Blind(crate::stage::Blind::Small);
-        g.consumables = vec![Consumable::Planet(Planets::Mercury)];
+        g.consumables = vec![Consumable::planet(Planets::Mercury)];
         let actions: Vec<Action> = g.gen_actions().collect();
         assert!(actions
             .iter()
@@ -242,11 +242,11 @@ mod tests {
         // at Shop, available is empty (clear_blind returns cards to deck without re-dealing)
         g.stage = Stage::Shop();
         assert_eq!(g.available.cards().len(), 0);
-        g.consumables = vec![Consumable::Tarot(Tarot::Magician)];
-        let res = g.handle_action(Action::UseConsumable(Consumable::Tarot(Tarot::Magician)));
+        g.consumables = vec![Consumable::tarot(Tarot::Magician)];
+        let res = g.handle_action(Action::UseConsumable(Consumable::tarot(Tarot::Magician)));
         assert!(matches!(res, Err(GameError::InvalidAction)));
         // Consumable is not consumed on a failed use, and no substitute hand is dealt.
-        assert_eq!(g.consumables, vec![Consumable::Tarot(Tarot::Magician)]);
+        assert_eq!(g.consumables, vec![Consumable::tarot(Tarot::Magician)]);
         assert_eq!(g.stage, Stage::Shop());
         assert_eq!(g.available.cards().len(), 0);
     }
@@ -258,12 +258,12 @@ mod tests {
         g.start();
         g.stage = Stage::Shop();
         assert_eq!(g.available.cards().len(), 0);
-        g.consumables = vec![Consumable::Spectral(Spectral::Talisman)];
-        let res = g.handle_action(Action::UseConsumable(Consumable::Spectral(
+        g.consumables = vec![Consumable::spectral(Spectral::Talisman)];
+        let res = g.handle_action(Action::UseConsumable(Consumable::spectral(
             Spectral::Talisman,
         )));
         assert!(matches!(res, Err(GameError::InvalidAction)));
-        assert_eq!(g.consumables, vec![Consumable::Spectral(Spectral::Talisman)]);
+        assert_eq!(g.consumables, vec![Consumable::spectral(Spectral::Talisman)]);
         assert_eq!(g.stage, Stage::Shop());
         assert_eq!(g.available.cards().len(), 0);
     }
@@ -281,35 +281,35 @@ mod tests {
         g.stage = Stage::Shop();
         g.config.consumable_slots = 3;
 
-        g.consumables = vec![Consumable::Planet(Planets::Mercury)];
-        g.handle_action(Action::UseConsumable(Consumable::Planet(Planets::Mercury)))
+        g.consumables = vec![Consumable::planet(Planets::Mercury)];
+        g.handle_action(Action::UseConsumable(Consumable::planet(Planets::Mercury)))
             .unwrap();
         assert_eq!(
             g.last_consumable_used,
-            Some(Consumable::Planet(Planets::Mercury))
+            Some(Consumable::planet(Planets::Mercury))
         );
 
         // Wraith is a 0-target Spectral that doesn't touch the hand, so it's
         // legal from Shop.
-        g.consumables.push(Consumable::Spectral(Spectral::Wraith));
-        g.handle_action(Action::UseConsumable(Consumable::Spectral(
+        g.consumables.push(Consumable::spectral(Spectral::Wraith));
+        g.handle_action(Action::UseConsumable(Consumable::spectral(
             Spectral::Wraith,
         )))
         .unwrap();
         // Using the Spectral must not overwrite what Fool remembers.
         assert_eq!(
             g.last_consumable_used,
-            Some(Consumable::Planet(Planets::Mercury))
+            Some(Consumable::planet(Planets::Mercury))
         );
 
-        g.consumables.push(Consumable::Tarot(Tarot::Fool));
-        g.handle_action(Action::UseConsumable(Consumable::Tarot(Tarot::Fool)))
+        g.consumables.push(Consumable::tarot(Tarot::Fool));
+        g.handle_action(Action::UseConsumable(Consumable::tarot(Tarot::Fool)))
             .unwrap();
-        assert!(g.consumables.contains(&Consumable::Planet(Planets::Mercury)));
+        assert!(g.consumables.contains(&Consumable::planet(Planets::Mercury)));
         assert!(
             !g.consumables
                 .iter()
-                .any(|c| matches!(c, Consumable::Spectral(_))),
+                .any(|c| matches!(c.kind, ConsumableKind::Spectral(_))),
             "Fool must never duplicate a Spectral"
         );
     }
@@ -324,15 +324,15 @@ mod tests {
         g.start();
         g.stage = Stage::Shop();
         assert_eq!(g.available.cards().len(), 0);
-        g.consumables = vec![Consumable::Spectral(Spectral::Familiar)];
-        let res = g.handle_action(Action::UseConsumable(Consumable::Spectral(
+        g.consumables = vec![Consumable::spectral(Spectral::Familiar)];
+        let res = g.handle_action(Action::UseConsumable(Consumable::spectral(
             Spectral::Familiar,
         )));
         assert!(matches!(res, Err(GameError::InvalidAction)));
-        assert_eq!(g.consumables, vec![Consumable::Spectral(Spectral::Familiar)]);
+        assert_eq!(g.consumables, vec![Consumable::spectral(Spectral::Familiar)]);
 
         let actions: Vec<Action> = g.gen_actions().collect();
-        assert!(!actions.contains(&Action::UseConsumable(Consumable::Spectral(
+        assert!(!actions.contains(&Action::UseConsumable(Consumable::spectral(
             Spectral::Familiar
         ))));
     }
@@ -343,10 +343,10 @@ mod tests {
         let mut g = Game::default();
         g.start();
         g.stage = Stage::Shop();
-        g.consumables = vec![Consumable::Spectral(Spectral::Sigil)];
+        g.consumables = vec![Consumable::spectral(Spectral::Sigil)];
         let actions: Vec<Action> = g.gen_actions().collect();
         // Sigil is 0-target but still touches the hand, so it's not offered from Shop.
-        assert!(!actions.contains(&Action::UseConsumable(Consumable::Spectral(Spectral::Sigil))));
+        assert!(!actions.contains(&Action::UseConsumable(Consumable::spectral(Spectral::Sigil))));
     }
 
     /// The two public move APIs duplicated the "can I use this consumable"
@@ -363,12 +363,12 @@ mod tests {
         // One at a time, because the action space has a fixed two-slot
         // consumable bucket and indexing past it is an error, not a skip.
         let all: Vec<Consumable> = [
-            Consumable::Tarot(Tarot::Death),
-            Consumable::Tarot(Tarot::Fool),
-            Consumable::Spectral(Spectral::Familiar),
-            Consumable::Spectral(Spectral::Sigil),
-            Consumable::Spectral(Spectral::Ankh),
-            Consumable::Planet(crate::planet::Planets::Mercury),
+            Consumable::tarot(Tarot::Death),
+            Consumable::tarot(Tarot::Fool),
+            Consumable::spectral(Spectral::Familiar),
+            Consumable::spectral(Spectral::Sigil),
+            Consumable::spectral(Spectral::Ankh),
+            Consumable::planet(crate::planet::Planets::Mercury),
         ]
         .into_iter()
         .collect();
