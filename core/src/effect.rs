@@ -29,9 +29,7 @@ pub enum RuleFlag {
 
 #[derive(Debug, Clone)]
 pub struct EffectRegistry {
-    pub on_play: Vec<Effects>,
     pub on_discard: Vec<Effects>,
-    pub on_handrank: Vec<Effects>,
     pub on_modify_hand: Vec<Effects>,
     pub on_round_end: Vec<Effects>,
     pub trigger_count_played: Vec<Effects>,
@@ -42,9 +40,7 @@ pub struct EffectRegistry {
 impl EffectRegistry {
     pub fn new() -> Self {
         Self {
-            on_play: Vec::new(),
             on_discard: Vec::new(),
-            on_handrank: Vec::new(),
             on_modify_hand: Vec::new(),
             on_round_end: Vec::new(),
             trigger_count_played: Vec::new(),
@@ -62,9 +58,7 @@ impl Default for EffectRegistry {
 
 impl EffectRegistry {
     pub fn register_jokers(&mut self, jokers: Vec<Jokers>, game: &Game) {
-        self.on_play.clear();
         self.on_discard.clear();
-        self.on_handrank.clear();
         self.on_modify_hand.clear();
         self.on_round_end.clear();
         self.trigger_count_played.clear();
@@ -73,11 +67,9 @@ impl EffectRegistry {
         for j in jokers {
             for e in j.effects(game) {
                 match e {
-                    Effects::OnPlay(_) => self.on_play.push(e),
                     Effects::OnDiscard(_) => self.on_discard.push(e),
                     Effects::OnScore(_) => {} // not cached, recomputed in score loop on purpose
                     Effects::OnSell(_) => {} // not cached, computed on the sold joker directly in sell_joker
-                    Effects::OnHandRank(_) => self.on_handrank.push(e),
                     Effects::OnModifyHand(_) => self.on_modify_hand.push(e),
                     Effects::OnRoundEnd(_) => self.on_round_end.push(e),
                     Effects::TriggerCountPlayed(_) => self.trigger_count_played.push(e),
@@ -91,15 +83,25 @@ impl EffectRegistry {
     }
 }
 
+/// A joker's effect, and the point in the turn it fires at.
+///
+/// Every variant here needs a firing site in `Game`, and
+/// `test_every_registered_effect_has_a_firing_site` enforces that two ways:
+/// `register_jokers` matches exhaustively, so an unhandled variant will not
+/// compile, and the test rejects any variant a joker emits that the game
+/// never reads. `OnPlay` and `OnHandRank` used to be here and failed both
+/// checks — no joker produced either, and nothing fired them. They were
+/// deleted rather than implemented, because every joker that would have used
+/// them is already covered: the hand-type family (Jolly, Zany, Sly, ...) reads
+/// `MadeHand::rank` in `OnScore`, and the "when a card is played" family reads
+/// `TriggerCountPlayed`/`TriggerCountHeld` from the per-card scoring loop.
 #[derive(Clone)]
 // signature of these callbacks are more complicated so they
 // can be used by pyo3 as part of python class.
 pub enum Effects {
-    OnPlay(GameHandFn),
     OnDiscard(GameHandFn),
     OnScore(GameHandFn),
     OnSell(GameFn),
-    OnHandRank(GameFn),
     OnModifyHand(GameModifyFn),
     OnRoundEnd(GameFn),
     TriggerCountPlayed(CardTriggerFn),
@@ -110,11 +112,9 @@ pub enum Effects {
 impl std::fmt::Debug for Effects {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::OnPlay(_) => write!(f, "OnPlay"),
             Self::OnDiscard(_) => write!(f, "OnDiscard"),
             Self::OnScore(_) => write!(f, "OnScore"),
             Self::OnSell(_) => write!(f, "OnSell"),
-            Self::OnHandRank(_) => write!(f, "OnHandRank"),
             Self::OnModifyHand(_) => write!(f, "OnModifyHand"),
             Self::OnRoundEnd(_) => write!(f, "OnRoundEnd"),
             Self::TriggerCountPlayed(_) => write!(f, "TriggerCountPlayed"),

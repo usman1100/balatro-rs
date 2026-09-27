@@ -162,20 +162,21 @@ a single `match self` that returns `Vec<Effects>` (`core/src/effect.rs`):
 
 | Effect | Fired where |
 | --- | --- |
-| `OnPlay` | — collected but never fired |
 | `OnDiscard` | `game.rs:497` |
 | `OnScore` | inline in the scoring loop, deliberately not cached |
 | `OnSell` | `game.rs:1013` |
-| `OnHandRank` | — collected but never fired |
 | `OnModifyHand` | `game.rs:814` |
 | `OnRoundEnd` | `game.rs:325` |
 | `TriggerCountPlayed` | `game.rs:614` |
 | `TriggerCountHeld` | `game.rs:630` |
 | `RuleFlag` | read by `is_face_card` (Pareidolia) |
 
-`EffectRegistry` caches seven of these; `OnScore` is recomputed inline because
-the edition bonus must sandwich each joker's own contribution, and
-`OnPlay`/`OnHandRank` are currently dead.
+`EffectRegistry` caches the rest; `OnScore` is recomputed inline because the
+edition bonus must sandwich each joker's own contribution.
+
+`OnPlay` and `OnHandRank` used to be in this table, marked as never fired. They
+were removed rather than implemented — see [Effects](#effects) below for why
+every joker that wanted them is already covered.
 
 `is_implemented()` (`core/src/joker.rs:806`) is an explicit whitelist, and it is
 the only thing keeping a joker whose effects are missing out of shops and packs.

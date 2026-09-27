@@ -2065,6 +2065,40 @@ mod tests {
     }
 
     #[test]
+    fn test_every_registered_effect_has_a_firing_site() {
+        let mut g = Game::new(Config {
+            seed: Some(7),
+            ..Config::default()
+        });
+        g.start();
+        let fired = fired_effect_variants();
+        for j in Jokers::iter() {
+            for e in j.effects(&g) {
+                let name = format!("{e:?}");
+                let variant = name.split(['(', ' ']).next().unwrap_or(&name);
+                assert!(
+                    fired.contains(&variant),
+                    "{} registers {name}, which nothing fires",
+                    j.name()
+                );
+            }
+        }
+    }
+
+    fn fired_effect_variants() -> &'static [&'static str] {
+        &[
+            "OnDiscard",
+            "OnScore",
+            "OnSell",
+            "OnModifyHand",
+            "OnRoundEnd",
+            "TriggerCountPlayed",
+            "TriggerCountHeld",
+            "RuleFlag",
+        ]
+    }
+
+    #[test]
     fn test_jokers_by_rarity_never_returns_unimplemented() {
         for rarity in [
             Rarity::Common,
