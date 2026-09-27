@@ -24,7 +24,8 @@ actually playing them in Balatro.
 use balatro_seed::Instance;
 
 let mut inst = Instance::new("TESTSEED");
-inst.init_locks(1);
+inst.init_locks(1, false, true);
+inst.init_unlocks(1, false);
 
 let boss = inst.next_boss(1);
 let voucher = inst.next_voucher(1);
@@ -72,6 +73,9 @@ same seed, and compare the `Output` box line by line against
 - [x] Shop item type selection (Joker/Tarot/Planet/Spectral), joker
       rarity + edition rolls
 - [x] Ante-gated locks/unlocks (`init_locks`/`init_unlocks`)
+- [x] Per-effect probability rolls (`ProcNode`): Lucky, Misprint, Hologram,
+      8 Ball, Bloodstone, Reserved Parking, Space Joker, Business Card,
+      Gros Michel, Cavendish, Wheel of Fortune, Certificate, The Wheel
 - [x] `explore` CLI for diffing against TheSoul's website output
 
 Not yet implemented:
@@ -85,3 +89,21 @@ Not yet implemented:
       instead
 - [ ] Pre-10099-version joker pool variants (only the current tables are
       ported; see `pools.rs`)
+
+## `ProcNode` provenance
+
+`ProcNode` (`src/proc.rs`) is the one part of this crate **not** taken from
+TheSoul — TheSoul doesn't model effect procs. Its node keys were transcribed
+by hand from a community dump of the game's own Lua at **1.0.0**
+(`card.lua`, `blind.lua`), while `InstParams::version` targets **1.0.1f**.
+`NODE_SOURCE_VERSION` records the 1.0.0 constant for exactly this reason:
+nothing here has been checked against a 1.0.1f dump, and no real-game output
+was available to validate against. Expect additions in 1.0.1f, not renames.
+
+The two node IDs that would complete the set are noted where they are used.
+`Glass Card`'s is missing entirely: the playing-card centre definitions that
+hold the shatter roll are not in the dump, so `core` keeps that one proc on
+its fast stream. `Misprint`, `Gros Michel`, `Cavendish`, `8 Ball`, `Space
+Joker` and `Hologram` are ported here but have no `core` call site yet,
+because those jokers aren't implemented in `core` either.
+

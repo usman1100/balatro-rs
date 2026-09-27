@@ -4,6 +4,7 @@
 
 use crate::node_id::NodeId;
 use crate::pool::Pool;
+use crate::proc::ProcNode;
 use crate::rng::{LuaRandom, pseudohash, round13};
 use balatro_types::Named;
 use std::collections::{HashMap, HashSet};
@@ -92,7 +93,6 @@ impl Instance {
         LuaRandom::new(node).random()
     }
 
-    #[allow(dead_code)]
     pub(crate) fn randint(&mut self, id: NodeId, min: i32, max: i32) -> i32 {
         let node = self.get_node(&id.to_string());
         LuaRandom::new(node).randint(min, max)
@@ -145,6 +145,42 @@ impl Instance {
     pub(crate) fn randchoice_typed<T>(&mut self, id: NodeId, pool: &Pool<T>) -> T {
         let name = self.randchoice(id, pool.names);
         pool.resolve(name)
+    }
+
+    /// `pseudorandom(node) < numerator * prob_mult / denominator`, the shape
+    /// every effect proc uses. `prob_mult` is the run's
+    /// `probabilities.normal` multiplier.
+    pub fn proc_roll(
+        &mut self,
+        node: ProcNode,
+        prob_mult: u32,
+        numerator: u32,
+        denominator: u32,
+    ) -> bool {
+        let bound = numerator.saturating_mul(prob_mult) as f64 / denominator as f64;
+        self.random(NodeId::Custom(&node.to_string())) < bound
+    }
+
+    /// The seal a generated playing card gets, from the real game's
+    /// `stdsealtype{ante}` node.
+    pub fn proc_roll_seal(&mut self, ante: i32) -> balatro_types::Seal {
+        use balatro_types::Seal;
+        let poll = self.random(NodeId::StdSealType(ante));
+        if poll > 0.75 {
+            Seal::Red
+        } else if poll > 0.5 {
+            Seal::Blue
+        } else if poll > 0.25 {
+            Seal::Gold
+        } else {
+            Seal::Purple
+        }
+    }
+
+    /// `pseudorandom(node, min, max)` — a flat range rather than a test, so
+    /// the proc multiplier does not apply.
+    pub fn proc_randint(&mut self, node: ProcNode, min: i32, max: i32) -> i32 {
+        self.randint(NodeId::Custom(&node.to_string()), min, max)
     }
 }
 

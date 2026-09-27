@@ -11,9 +11,11 @@ mod instance;
 mod node_id;
 mod pool;
 mod pools;
+mod proc;
 mod resolve;
 mod rng;
 
 pub use draws::{ShopItem, pack_card_count, voucher_upgrade};
 pub use instance::{InstParams, Instance};
+pub use proc::{NODE_SOURCE_VERSION, ProcNode};
 pub use rng::{LuaRandom, pseudohash, round13};
