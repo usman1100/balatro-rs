@@ -3,3 +3,4 @@ balatro-jkr/tests/fixtures/real/*.jkr
 balatro-profile/tests/fixtures/real/*.jkr
 *.json
 /docs
+game-docs
