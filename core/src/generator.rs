@@ -198,7 +198,8 @@ impl Game {
         if self.jokers.len() >= self.joker_slots() {
             return None;
         }
-        self.shop.gen_moves_buy_joker(self.money, &self.vouchers)
+        self.shop
+            .gen_moves_buy_joker(self.spendable_balance(), &self.vouchers)
     }
 
     // Get buy consumable actions
@@ -207,7 +208,7 @@ impl Game {
             return None;
         }
         self.shop.gen_moves_buy_consumable(
-            self.money,
+            self.spendable_balance(),
             self.consumable_slots(),
             self.consumables.len(),
             &self.vouchers,
@@ -300,7 +301,7 @@ impl Game {
         if self.stage != Stage::Shop() {
             return None;
         }
-        self.shop.gen_moves_buy_voucher(self.money)
+        self.shop.gen_moves_buy_voucher(self.spendable_balance())
     }
 
     // Get buy playing card actions (Magic Trick)
@@ -313,7 +314,8 @@ impl Game {
         {
             return None;
         }
-        self.shop.gen_moves_buy_card(self.money, &self.vouchers)
+        self.shop
+            .gen_moves_buy_card(self.spendable_balance(), &self.vouchers)
     }
 
     // Get buy pack actions
@@ -321,7 +323,8 @@ impl Game {
         if self.stage != Stage::Shop() {
             return None;
         }
-        self.shop.gen_moves_buy_pack(self.money, &self.vouchers)
+        self.shop
+            .gen_moves_buy_pack(self.spendable_balance(), &self.vouchers)
     }
 
     // Get pick pack card actions (active while a pack is open)
@@ -363,7 +366,7 @@ impl Game {
         if self.stage != Stage::Shop() {
             return None;
         }
-        if self.money < self.reroll_cost {
+        if !self.can_afford(self.reroll_cost) {
             return None;
         }
         Some(vec![Action::Reroll()].into_iter())
@@ -669,7 +672,7 @@ impl Game {
             .jokers
             .iter()
             .enumerate()
-            .filter(|(_i, j)| self.price(j.cost()) <= self.money)
+            .filter(|(_i, j)| self.price(j.cost()) <= self.spendable_balance())
             .for_each(|(i, _j)| {
                 space
                     .unmask_buy_joker(i)
@@ -688,7 +691,7 @@ impl Game {
             .consumables
             .iter()
             .enumerate()
-            .filter(|(_i, c)| self.price(c.cost()) <= self.money)
+            .filter(|(_i, c)| self.price(c.cost()) <= self.spendable_balance())
             .for_each(|(i, _c)| {
                 space
                     .unmask_buy_consumable(i)
@@ -736,7 +739,7 @@ impl Game {
             .packs
             .iter()
             .enumerate()
-            .filter(|(_, p)| self.price(p.cost()) <= self.money)
+            .filter(|(_, p)| self.price(p.cost()) <= self.spendable_balance())
             .for_each(|(i, _)| {
                 space.unmask_buy_pack(i).expect("valid index for buy pack");
             });
@@ -762,7 +765,7 @@ impl Game {
             .cards
             .iter()
             .enumerate()
-            .filter(|(_, c)| self.price(c.shop_cost()) <= self.money)
+            .filter(|(_, c)| self.price(c.shop_cost()) <= self.spendable_balance())
             .for_each(|(i, _)| {
                 space
                     .unmask_buy_playing_card(i)
@@ -819,7 +822,7 @@ impl Game {
         if self.stage != Stage::Shop() {
             return;
         }
-        if self.money < self.reroll_cost {
+        if !self.can_afford(self.reroll_cost) {
             return;
         }
         space.unmask_reroll();

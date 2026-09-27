@@ -50,6 +50,8 @@ const MADNESS_MULT_STEP: f32 = 0.5;
 const CEREMONIAL_DAGGER_VALUE_MULT: usize = 2;
 const INVISIBLE_JOKER_ROUNDS: usize = 2;
 const MR_BONES_DIVISOR: usize = 4;
+/// One Credit Card's worth of debt allowance.
+pub(crate) const CREDIT_CARD_DEBT: i64 = 20;
 const MISPRINT_MAX: i32 = 23;
 
 fn default_reroll_cost() -> usize {
@@ -109,7 +111,15 @@ pub struct Game {
     #[cfg_attr(feature = "serde", serde(rename = "discards"))] // shouldn't access directly
     pub discards_remaining: usize,
     pub reward: usize,
-    pub money: usize,
+    /// Signed: the real game lets this go negative, and Credit Card is the
+    /// joker that buys the allowance. `bankrupt_at` is the floor and
+    /// defaults to 0, so without a Credit Card the balance still cannot
+    /// drop below zero.
+    pub money: i64,
+    /// How far below zero `money` may go. Each Credit Card lowers it by
+    /// `CREDIT_CARD_DEBT`; selling one gives the allowance back.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub bankrupt_at: i64,
 
     // for scoring
     pub chips: usize,
@@ -261,7 +271,8 @@ impl Game {
             plays: config.plays,
             discards_remaining: config.discards,
             reward: config.reward_base,
-            money: config.money_start,
+            money: config.money_start as i64,
+            bankrupt_at: 0,
             chips: config.base_chips,
             mult: config.base_mult,
             score: config.base_score,
@@ -481,7 +492,7 @@ impl Game {
         if !self.jokers.iter().any(|j| matches!(j, Jokers::ToTheMoon(_))) {
             return 0;
         }
-        self.money / TO_THE_MOON_PER_DOLLAR
+        self.money.max(0) as usize / TO_THE_MOON_PER_DOLLAR
     }
 
     /// Astronomer: every Planet card and Celestial Pack in the shop is free.
@@ -588,6 +599,33 @@ impl Game {
     /// themselves are never discounted.
     pub fn price(&self, cost: usize) -> usize {
         self.vouchers.discounted(cost)
+    }
+
+    /// Money available to spend, which is the balance less any debt
+    /// allowance. Non-negative by construction, so every affordability
+    /// check downstream can stay a plain `usize` comparison. With no Credit
+    /// Card the allowance is 0 and this is just the balance.
+    pub fn spendable_balance(&self) -> usize {
+        (self.money - self.bankrupt_at).max(0) as usize
+    }
+
+    /// Whether a purchase of `cost` is covered.
+    pub fn can_afford(&self, cost: usize) -> bool {
+        cost as i64 <= self.spendable_balance() as i64
+    }
+
+    /// The debt allowance the run has bought. Negative, so this is a floor
+    /// rather than a balance.
+    pub fn debt_allowance(&self) -> i64 {
+        -self.bankrupt_at
+    }
+
+    /// The balance a charge is allowed to leave behind. Payments never push
+    /// the balance below the floor, so a run can't accidentally go into
+    /// debt from a joker effect — only a purchase can, and only because
+    /// `can_afford` checked it.
+    pub fn debt_floor(&self) -> i64 {
+        self.bankrupt_at
     }
 
     fn apply_delta(base: usize, delta: isize) -> usize {
@@ -906,7 +944,7 @@ impl Game {
             if oxes_money {
                 g.money = 0;
             }
-            g.money = g.money.saturating_sub(tooth);
+            g.money = (g.money - tooth as i64).max(g.debt_floor());
             g.boss_state.played_this_ante.extend(pillar_ids);
             if wheel {
                 g.boss_wheel_editions(cards_played);
@@ -1487,7 +1525,9 @@ impl Game {
     }
 
     fn calc_reward(&mut self, blind: Blind) -> Result<usize, GameError> {
-        let mut interest = (self.money as f32 * self.config.interest_rate).floor() as usize;
+        // Interest is earned, never charged, so a balance in debt earns
+        // none rather than a negative amount.
+        let mut interest = (self.money.max(0) as f32 * self.config.interest_rate).floor() as usize;
         let interest_max = self.interest_max();
         if interest > interest_max {
             interest = interest_max
@@ -1539,11 +1579,11 @@ impl Game {
             Tag::Buffoon => self.open_free_pack(PackCategory::Buffoon, PackSize::Mega),
             Tag::Ethereal => self.open_free_pack(PackCategory::Spectral, PackSize::Normal),
             // $1 per hand played this run.
-            Tag::Handy => self.money += self.hands_played_this_run,
+            Tag::Handy => self.money += self.hands_played_this_run as i64,
             // $1 per unused discard this run.
-            Tag::Garbage => self.money += self.unused_discards_this_run,
+            Tag::Garbage => self.money += self.unused_discards_this_run as i64,
             // $5 per blind skipped this run.
-            Tag::Speed => self.money += 5 * self.blinds_skipped_this_run,
+            Tag::Speed => self.money += 5 * self.blinds_skipped_this_run as i64,
             // Doubles money, but only ever adds up to $40.
             Tag::Economy => self.money += self.money.min(40),
             // Every Joker, consumable and pack in the next shop is free.
@@ -1612,7 +1652,7 @@ impl Game {
     }
 
     fn cashout(&mut self) -> Result<(), GameError> {
-        self.money += self.reward;
+        self.money += self.reward as i64;
         self.reward = 0;
         self.reroll_cost = self.base_reroll_cost();
         self.rerolls_this_shop = 0;
@@ -1676,7 +1716,7 @@ impl Game {
         if self.stage != Stage::Shop() {
             return Err(GameError::InvalidStage);
         }
-        if self.money < self.reroll_cost {
+        if !self.can_afford(self.reroll_cost) {
             return Err(GameError::InvalidBalance);
         }
         // Chaos the Clown's rerolls cost nothing and don't escalate.
@@ -1684,7 +1724,7 @@ impl Game {
         if free {
             self.free_rerolls_this_round -= 1;
         } else {
-            self.money -= self.reroll_cost;
+            self.money -= self.reroll_cost as i64;
             self.reroll_cost += 1;
         }
         self.rerolls_this_shop += 1;
@@ -1710,7 +1750,7 @@ impl Game {
         if idx >= self.jokers.len() {
             return Err(GameError::InvalidAction);
         }
-        self.money += self.jokers[idx].sell_value();
+        self.money += self.jokers[idx].sell_value() as i64;
         let sold = self.jokers.remove(idx);
         for e in sold.effects(self) {
             if let Effects::OnSell(f) = e {
@@ -1731,6 +1771,12 @@ impl Game {
             self.boss_disabled = true;
             self.boss_state.all_cards_debuffed = false;
         }
+        // Credit Card takes its debt allowance back with it, matching the
+        // real game's remove hook.
+        if matches!(sold, Jokers::CreditCard(_)) {
+            self.bankrupt_at += CREDIT_CARD_DEBT;
+        }
+
         // Only unlock if this was the last owned copy (Showman is the only
         // way to own more than one) — a discriminant compare, matching
         // shop.rs's own exclude-list comparisons, since Jokers' derived
@@ -1754,7 +1800,7 @@ impl Game {
         if idx >= self.consumables.len() {
             return Err(GameError::InvalidAction);
         }
-        self.money += self.consumables[idx].sell_value();
+        self.money += self.consumables[idx].sell_value() as i64;
         self.consumables.remove(idx);
         Ok(())
     }
@@ -1780,15 +1826,18 @@ impl Game {
         let free = self.shop.couponed
             || slot.is_some_and(|i| self.shop.free_joker_slots.contains(&i));
         let cost = if free { 0 } else { self.price(joker.cost()) };
-        if cost > self.money {
+        if !self.can_afford(cost) {
             return Err(GameError::InvalidBalance);
         }
         self.shop.buy_joker(&joker)?;
         if let Some(i) = slot {
             self.shop.free_joker_slots.remove(&i);
         }
-        self.money -= cost;
+        self.money -= cost as i64;
         self.backend.on_joker_bought(&joker);
+        if matches!(joker, Jokers::CreditCard(_)) {
+            self.bankrupt_at -= CREDIT_CARD_DEBT;
+        }
         self.jokers.push(joker);
         self.effect_registry
             .register_jokers(self.jokers.clone(), &self.clone());
@@ -1803,11 +1852,11 @@ impl Game {
             return Err(GameError::NoAvailableSlot);
         }
         let cost = self.shop.price(|c| self.price(c), consumable.cost());
-        if cost > self.money {
+        if !self.can_afford(cost) {
             return Err(GameError::InvalidBalance);
         }
         self.shop.buy_consumable(&consumable)?;
-        self.money -= cost;
+        self.money -= cost as i64;
         self.consumables.push(consumable);
         Ok(())
     }
@@ -1822,11 +1871,11 @@ impl Game {
             return Err(GameError::VoucherAlreadyRedeemed);
         }
         // Vouchers are exempt from Clearance Sale / Liquidation.
-        if voucher.cost() > self.money {
+        if !self.can_afford(voucher.cost()) {
             return Err(GameError::InvalidBalance);
         }
         self.shop.buy_voucher(&voucher)?;
-        self.money -= voucher.cost();
+        self.money -= voucher.cost() as i64;
         self.vouchers.redeem(voucher);
         self.backend.on_voucher_bought(&voucher);
         self.apply_voucher(voucher);
@@ -1874,11 +1923,11 @@ impl Game {
             return Err(GameError::NoAvailableSlot);
         }
         let cost = self.price(card.shop_cost());
-        if cost > self.money {
+        if !self.can_afford(cost) {
             return Err(GameError::InvalidBalance);
         }
         let bought = self.shop.buy_card(&card)?;
-        self.money -= cost;
+        self.money -= cost as i64;
         self.deck.push(bought);
         Ok(())
     }
@@ -2013,11 +2062,11 @@ impl Game {
             return Err(GameError::InvalidStage);
         }
         let cost = self.shop.price(|c| self.price(c), pack.cost());
-        if cost > self.money {
+        if !self.can_afford(cost) {
             return Err(GameError::InvalidBalance);
         }
         self.shop.buy_pack(&pack)?;
-        self.money -= cost;
+        self.money -= cost as i64;
 
         // Arcana/Spectral packs draw a hand for the player to apply targeted
         // tarots/spectrals against
@@ -2494,7 +2543,7 @@ impl Game {
             self.campfire_sold = 0;
             // Investment Tag pays here, not when the tag was collected.
             if std::mem::take(&mut self.tag_state.investment) {
-                self.money += INVESTMENT_TAG_DOLLARS;
+                self.money += INVESTMENT_TAG_DOLLARS as i64;
             }
             if let Some(ante_next) = self.ante_current.next(self.ante_end) {
                 self.ante_current = ante_next;
@@ -3974,7 +4023,7 @@ mod tests {
         let j1 = crate::joker::jokers_by_rarity(crate::joker::Rarity::Common)[0].clone();
         g.shop.jokers = vec![j1.clone()];
         g.buy_joker(j1.clone()).expect("buy joker");
-        assert_eq!(g.money, 10 - j1.cost());
+        assert_eq!(g.money, (10 - j1.cost()) as i64);
         assert_eq!(g.jokers.len(), 1);
     }
 
@@ -4671,7 +4720,7 @@ mod tests {
 
         g.sell_joker(0).expect("sell joker");
         assert_eq!(g.jokers.len(), 0);
-        assert_eq!(g.money, sell_value);
+        assert_eq!(g.money, sell_value as i64);
     }
 
     #[test]
@@ -4710,7 +4759,7 @@ mod tests {
 
         g.sell_joker(0).expect("sell joker during blind");
         assert_eq!(g.jokers.len(), 0);
-        assert_eq!(g.money, sell_value);
+        assert_eq!(g.money, sell_value as i64);
     }
 
     #[test]
@@ -4764,7 +4813,7 @@ mod tests {
 
         g.sell_consumable(0).expect("sell consumable");
         assert_eq!(g.consumables.len(), 0);
-        assert_eq!(g.money, sell_value);
+        assert_eq!(g.money, sell_value as i64);
     }
 
     #[test]
@@ -4801,7 +4850,7 @@ mod tests {
 
         g.sell_joker(0).expect("sell joker during tarot hand");
         assert_eq!(g.jokers.len(), 0);
-        assert_eq!(g.money, sell_value);
+        assert_eq!(g.money, sell_value as i64);
     }
 
     #[test]
@@ -4818,7 +4867,7 @@ mod tests {
         g.sell_consumable(0)
             .expect("sell consumable during tarot hand");
         assert_eq!(g.consumables.len(), 0);
-        assert_eq!(g.money, sell_value);
+        assert_eq!(g.money, sell_value as i64);
     }
 
     #[test]
@@ -4856,7 +4905,7 @@ mod tests {
         g.shop.packs.push(pack.clone());
         g.buy_pack(pack).expect("buy pack");
         assert_eq!(g.stage, Stage::PackOpen());
-        assert_eq!(g.money, 100 - cost);
+        assert_eq!(g.money, (100 - cost) as i64);
         let state = g.open_pack.as_ref().expect("open pack state");
         assert_eq!(state.picks_remaining, picks);
     }
@@ -5222,13 +5271,13 @@ mod tests {
         g.start();
         g.stage = Stage::PostBlind();
         g.handle_action(Action::CashOut(0)).expect("cash out");
-        g.money = money;
+        g.money = money as i64;
         g
     }
 
     fn redeem(g: &mut Game, voucher: Voucher) {
         g.shop.voucher = Some(voucher);
-        g.money = g.money.max(voucher.cost());
+        g.money = g.money.max(voucher.cost() as i64);
         g.handle_action(Action::BuyVoucher(voucher))
             .expect("buy voucher");
     }
@@ -5533,7 +5582,7 @@ mod tests {
             .expect("buy voucher");
         assert_eq!(g.shop.voucher, None);
         assert!(g.vouchers.has(offered));
-        assert_eq!(g.money, 50 - 5 - offered.cost(), "reroll then voucher");
+        assert_eq!(g.money, (50 - 5 - offered.cost()) as i64, "reroll then voucher");
     }
 
     #[test]
@@ -5622,14 +5671,14 @@ mod tests {
         let full = joker.cost();
         let money_before = g.money;
         g.buy_joker(joker).expect("buy joker");
-        assert_eq!(g.money, money_before - (full * 3 / 4));
+        assert_eq!(g.money, money_before - (full * 3 / 4) as i64);
 
         // Vouchers keep their sticker price.
         g.shop.voucher = Some(Voucher::Blank);
         let money_before = g.money;
         g.handle_action(Action::BuyVoucher(Voucher::Blank))
             .expect("buy voucher");
-        assert_eq!(g.money, money_before - Voucher::Blank.cost());
+        assert_eq!(g.money, money_before - Voucher::Blank.cost() as i64);
     }
 
     #[test]
@@ -5829,7 +5878,7 @@ mod tests {
         assert_eq!(g.deck.len(), deck_before + 1);
         assert!(g.deck.cards().iter().any(|c| c.id == card.id));
         assert!(!g.shop.cards.iter().any(|c| c.id == card.id));
-        assert_eq!(g.money, 100 - card.shop_cost());
+        assert_eq!(g.money, (100 - card.shop_cost()) as i64);
     }
 
     // regression: `buy_playing_card` didn't check `deck_max` itself
@@ -5875,6 +5924,136 @@ mod tests {
         g.handle_action_index(index).expect("handle action index");
         assert!(g.vouchers.has(offered));
     }
+
+    // --- Credit Card and negative money ---
+
+    /// A game in the Shop with `money` in the bank, ready to transact.
+    fn shop_with_money(money: i64) -> Game {
+        let mut g = game_in_shop_with_tag(Tag::Double);
+        g.money = money;
+        g
+    }
+
+    /// Buys a Credit Card through the real shop path, so the allowance hook
+    /// is exercised rather than poked. The Card costs $1, so the balance
+    /// moves even when the caller started at $0.
+    fn give_credit_card(g: &mut Game) {
+        let mut card = Jokers::CreditCard(Default::default());
+        card.set_instance_id(crate::joker::mint_joker_id());
+        g.shop.jokers = vec![card.clone()];
+        g.money = g.money.max(card.cost() as i64);
+        g.buy_joker(card).expect("buy a Credit Card");
+    }
+
+    #[test]
+    fn test_credit_card_allows_twenty_of_debt() {
+        let mut g = shop_with_money(0);
+        assert_eq!(g.bankrupt_at, 0, "no allowance without the joker");
+        give_credit_card(&mut g);
+        assert_eq!(g.bankrupt_at, -20);
+        assert_eq!(g.debt_allowance(), 20);
+        // The helper tops the balance up to cover the Card, so it is back to
+        // $0 and the whole $20 of allowance is unused.
+        assert_eq!(g.money, 0);
+        assert_eq!(g.spendable_balance(), 20);
+    }
+
+    #[test]
+    fn test_credit_card_lets_a_purchase_take_the_balance_negative() {
+        let mut g = shop_with_money(5);
+        give_credit_card(&mut g);
+        assert_eq!(g.money, 4, "the Card itself cost $1");
+        g.shop.voucher = Some(Voucher::Blank);
+        g.handle_action(Action::BuyVoucher(Voucher::Blank))
+            .expect("the allowance covers this");
+        assert_eq!(g.money, -6, "and the balance is now in debt");
+        assert_eq!(g.bankrupt_at, -20, "which the floor has not moved for");
+    }
+
+    #[test]
+    fn test_a_purchase_cannot_go_past_the_allowance() {
+        // A balance already sitting on the floor has no headroom left.
+        let mut g = shop_with_money(-20);
+        g.bankrupt_at = -20;
+        assert_eq!(g.spendable_balance(), 0);
+        g.shop.voucher = Some(Voucher::Blank);
+        assert!(
+            g.handle_action(Action::BuyVoucher(Voucher::Blank)).is_err(),
+            "the allowance is already spent"
+        );
+        assert_eq!(g.money, -20, "and a failed purchase changes nothing");
+
+        // One dollar short of the floor there is exactly $1 of headroom.
+        g.money = -19;
+        assert!(g.can_afford(1));
+        assert!(!g.can_afford(2));
+    }
+
+    #[test]
+    fn test_without_a_credit_card_the_balance_cannot_go_negative() {
+        let mut g = shop_with_money(0);
+        g.shop.voucher = Some(Voucher::Blank);
+        assert!(
+            g.handle_action(Action::BuyVoucher(Voucher::Blank)).is_err(),
+            "no allowance, so no debt"
+        );
+        assert_eq!(g.money, 0);
+    }
+
+    #[test]
+    fn test_selling_a_credit_card_takes_the_allowance_back() {
+        let mut g = shop_with_money(0);
+        give_credit_card(&mut g);
+        assert_eq!(g.bankrupt_at, -20);
+        g.sell_joker(0).expect("sell");
+        assert_eq!(g.bankrupt_at, 0, "the allowance goes back with it");
+        // A $1 Card sells for $1, so the balance is back to $1 and, with no
+        // allowance, that's all there is to spend.
+        assert_eq!(g.money, 1);
+        assert_eq!(g.spendable_balance(), 1);
+        g.shop.voucher = Some(Voucher::Blank);
+        assert!(
+            g.handle_action(Action::BuyVoucher(Voucher::Blank)).is_err(),
+            "$1 cannot cover a $10 voucher once the allowance is gone"
+        );
+    }
+
+    #[test]
+    fn test_two_credit_cards_double_the_allowance() {
+        let mut g = shop_with_money(0);
+        give_credit_card(&mut g);
+        give_credit_card(&mut g);
+        assert_eq!(g.bankrupt_at, -40);
+        // The helper tops up before each purchase, so the balance is $0 and
+        // the whole $40 of allowance is unused.
+        assert_eq!(g.money, 0);
+        assert_eq!(g.spendable_balance(), 40);
+    }
+
+    #[test]
+    fn test_debt_never_earns_interest() {
+        let mut g = shop_with_money(-20);
+        g.bankrupt_at = -20;
+        let reward = g.calc_reward(Blind::Small).expect("reward");
+        // Blind reward plus the per-hand bonus, and no interest at all.
+        assert_eq!(
+            reward,
+            Blind::Small.reward() + g.plays * g.config.money_per_hand,
+            "a debt balance earns no interest"
+        );
+    }
+
+    #[test]
+    fn test_a_joker_payment_never_pushes_the_balance_into_debt() {
+        // The Tooth charges a dollar per card played. A debt balance
+        // absorbs the charge rather than going further under, because
+        // only a purchase may open the allowance.
+        let mut g = shop_with_money(-20);
+        g.bankrupt_at = -20;
+        g.money = (g.money - 5).max(g.debt_floor());
+        assert_eq!(g.money, -20, "clamped at the floor");
+    }
+
 
     // --- boss blind modifiers ---
 

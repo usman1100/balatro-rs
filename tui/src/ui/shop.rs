@@ -93,7 +93,7 @@ fn render_jokers_for_sale(f: &mut Frame, app: &mut AppState, area: Rect) {
         }
         let is_cursor = focused && app.cursor == i;
         let price = app.game.price(joker.cost());
-        let can_afford = app.game.money >= price;
+        let can_afford = app.game.can_afford(price);
         render_price_tag(f, x, area.y, price, can_afford);
 
         let item_rect = Rect {
@@ -131,7 +131,7 @@ fn render_jokers_for_sale(f: &mut Frame, app: &mut AppState, area: Rect) {
         }
         let is_cursor = focused && app.cursor == slot;
         let price = app.game.price(consumable.cost());
-        let can_afford = app.game.money >= price;
+        let can_afford = app.game.can_afford(price);
         render_price_tag(f, x, area.y, price, can_afford);
         let fg = super::consumable_type_color(consumable);
 
@@ -173,7 +173,7 @@ fn render_jokers_for_sale(f: &mut Frame, app: &mut AppState, area: Rect) {
 
         let is_cursor = focused && app.cursor == slot;
         let price = app.game.price(card.shop_cost());
-        let can_afford = app.game.money >= price;
+        let can_afford = app.game.can_afford(price);
         let fg = suit_color(card.suit);
 
         let block = Block::default()
@@ -235,7 +235,7 @@ fn render_packs_for_sale(f: &mut Frame, app: &mut AppState, area: Rect) {
         }
         let is_cursor = focused && app.cursor == i;
         let price = app.game.price(pack.cost());
-        let can_afford = app.game.money >= price;
+        let can_afford = app.game.can_afford(price);
         render_price_tag(f, x, area.y, price, can_afford);
         let category_color = pack_category_color(&pack.category);
 
@@ -311,7 +311,7 @@ fn render_voucher_for_sale(
     };
     let is_cursor = app.focus == FocusZone::ShopPacks && app.cursor == slot;
     // Vouchers are exempt from Clearance Sale / Liquidation.
-    let can_afford = app.game.money >= voucher.cost();
+    let can_afford = app.game.can_afford(voucher.cost());
     let inner_w = (CARD_W as usize).saturating_sub(2);
 
     let block = Block::default()
@@ -365,7 +365,7 @@ fn render_voucher_for_sale(
 
 fn render_reroll(f: &mut Frame, app: &mut AppState, area: Rect) {
     let cost = app.game.reroll_cost;
-    let can_afford = app.game.money >= cost;
+    let can_afford = app.game.can_afford(cost);
     let focused = app.focus == FocusZone::ShopReroll;
 
     let btn_w: u16 = 24;

@@ -67,14 +67,14 @@ variable-length iterator.
 - [x] card enhancements, editions, and seals in effect
 - [x] all 24 tags
 - [x] all 28 boss blind modifiers, 29/32 vouchers
-- [x] 148/150 jokers implemented so far
+- [x] 149/150 jokers implemented so far
 
 The following are missing and may or may not be added:
 
 - [ ] alternative decks
 - [ ] alternative stakes
 - [ ] sticker behavior (eternal/perishable/rental are data only)
-- [ ] negative money (Credit Card) and Negative-edition consumables (Perkeo)
+- [ ] Negative-edition consumables (Perkeo)
 
 `RngMode::Real` drives shop, pack, voucher, tag, boss and effect-proc
 generation through `balatro-seed`, and core's output matches `balatro-seed`'s

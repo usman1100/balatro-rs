@@ -127,8 +127,8 @@ fn main() -> Result<()> {
             println!("{game}");
             return Ok(());
         }
-        Command::SetMoney { amount } => game.money = amount,
-        Command::AddMoney { amount } => game.money = game.money.saturating_add(amount),
+        Command::SetMoney { amount } => game.money = amount as i64,
+        Command::AddMoney { amount } => game.money = game.money.saturating_add(amount as i64),
         Command::SetRerollCost { amount } => game.reroll_cost = amount,
         Command::SetAnte { ante } => {
             game.ante_current = Ante::try_from(ante)

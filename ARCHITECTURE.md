@@ -215,7 +215,7 @@ Behaviour implemented in `core`:
 - all 24 tags
 - 29/32 vouchers
 - all 28 boss blind modifiers
-- 148/150 jokers
+- 149/150 jokers
 - effect procs in real RNG mode (one node per effect)
 
 Boss blind modifiers split three ways. Most are stateless: a debuff is a pure

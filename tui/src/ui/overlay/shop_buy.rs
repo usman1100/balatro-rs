@@ -21,7 +21,7 @@ pub fn render(f: &mut Frame, app: &mut AppState, area: Rect, slot: ShopSlot) {
         return;
     };
 
-    let can_afford = app.game.money >= cost;
+    let can_afford = app.game.can_afford(cost);
     let buy_selected = app.overlay_cursor == 0;
     // A dim, un-highlighted "Buy" that's still technically clickable but
     // silently does nothing reads as broken — spell out *why* instead, so
@@ -49,7 +49,10 @@ pub fn render(f: &mut Frame, app: &mut AppState, area: Rect, slot: ShopSlot) {
     let buy_text = if can_afford {
         format!("  [ Buy (${}) ]", cost)
     } else {
-        format!("  [ Need ${} more ]", cost.saturating_sub(app.game.money))
+        format!(
+            "  [ Need ${} more ]",
+            cost.saturating_sub(app.game.spendable_balance())
+        )
     };
     let gap = "   ";
     let cancel_text = "[ Cancel ]";

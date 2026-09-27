@@ -359,7 +359,7 @@ impl ActionSpace {
             let Some(bit) = self.buy_voucher.get_mut(slot) else {
                 break;
             };
-            if offer.cost() <= game.money {
+            if game.can_afford(offer.cost()) {
                 *bit = 1;
             }
         }

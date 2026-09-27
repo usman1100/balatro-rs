@@ -16,7 +16,7 @@ static JOKER_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 /// How many jokers have real behavior. Kept in step with
 /// `JokerEffects::is_implemented` by a test.
 #[cfg(test)]
-const IMPLEMENTED_JOKER_COUNT: usize = 148;
+const IMPLEMENTED_JOKER_COUNT: usize = 149;
 
 /// The real game's own numbers for the jokers below, kept together so a
 /// value from the wiki can be checked against its neighbours at a glance.
@@ -545,7 +545,8 @@ impl JokerEffects for Jokers {
             }
             Self::Bull(_) => {
                 fn apply(g: &mut Game, _hand: MadeHand) {
-                    g.chips += g.money * 2;
+                    // The real game clamps at zero here.
+                    g.chips += g.money.max(0) as usize * 2;
                 }
                 vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
             }
@@ -863,7 +864,7 @@ impl JokerEffects for Jokers {
                         return;
                     };
                     let count = hand.all.iter().filter(|c| c.value == value).count();
-                    g.money += count * 5;
+                    g.money += count as i64 * 5;
                 };
                 vec![Effects::OnDiscard(Arc::new(Mutex::new(apply)))]
             }
@@ -965,7 +966,14 @@ impl JokerEffects for Jokers {
             }
             Self::Bootstraps(_) => {
                 fn apply(g: &mut Game, _hand: MadeHand) {
-                    g.mult += 2 * (g.money / BOOTSTRAPS_PER_DOLLAR);
+                    // The real game is `mult * math.floor(dollars / per)`, so
+                    // a debt balance subtracts Mult. `Game::mult` is a usize
+                    // and cannot go negative, so the contribution is clamped
+                    // at zero instead: Bootstraps pays nothing in debt
+                    // rather than costing Mult, and never wraps.
+                    let per = BOOTSTRAPS_PER_DOLLAR as i64;
+                    let bonus = g.money.div_euclid(per).max(0) as usize;
+                    g.mult += 2 * bonus;
                 }
                 vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
             }
@@ -1136,7 +1144,7 @@ impl JokerEffects for Jokers {
             // End of blind.
             Self::GoldenJoker(_) => {
                 fn apply(g: &mut Game) {
-                    g.money += GOLDEN_JOKER_DOLLARS;
+                    g.money += GOLDEN_JOKER_DOLLARS as i64;
                 }
                 vec![Effects::OnRoundEnd(Arc::new(Mutex::new(apply)))]
             }
@@ -1159,7 +1167,7 @@ impl JokerEffects for Jokers {
             }
             Self::Rocket(_) => {
                 fn apply(g: &mut Game) {
-                    g.money += ROCKET_DOLLARS;
+                    g.money += ROCKET_DOLLARS as i64;
                 }
                 vec![Effects::OnRoundEnd(Arc::new(Mutex::new(apply)))]
             }
@@ -1173,21 +1181,21 @@ impl JokerEffects for Jokers {
                         .chain(g.discarded.iter())
                         .filter(|c| c.value == Value::Nine)
                         .count();
-                    g.money += nines;
+                    g.money += nines as i64;
                 }
                 vec![Effects::OnRoundEnd(Arc::new(Mutex::new(apply)))]
             }
             Self::Satellite(_) => {
                 fn apply(g: &mut Game) {
                     // One dollar per distinct planet used, not per use.
-                    g.money += g.distinct_planets_used();
+                    g.money += g.distinct_planets_used() as i64;
                 }
                 vec![Effects::OnRoundEnd(Arc::new(Mutex::new(apply)))]
             }
             Self::DelayedGratification(_) => {
                 fn apply(g: &mut Game) {
                     if g.discarded_this_round.is_empty() {
-                        g.money += DELAYED_GRATIFICATION_DOLLARS * g.plays;
+                        g.money += DELAYED_GRATIFICATION_DOLLARS as i64 * g.plays as i64;
                     }
                 }
                 vec![Effects::OnRoundEnd(Arc::new(Mutex::new(apply)))]
@@ -1287,7 +1295,7 @@ impl JokerEffects for Jokers {
                     if g.joker_state(id).and_then(|s| s.selector)
                         == Some(SelectorValue::Hand(hand.rank))
                     {
-                        g.money += TODO_LIST_DOLLARS;
+                        g.money += TODO_LIST_DOLLARS as i64;
                     }
                 };
                 vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
@@ -1379,7 +1387,7 @@ impl JokerEffects for Jokers {
             }
             Self::Vagabond(_) => {
                 fn apply(g: &mut Game, _hand: MadeHand) {
-                    if g.money <= VAGABOND_MONEY {
+                    if g.money <= VAGABOND_MONEY as i64 {
                         g.add_tarot();
                     }
                 }
@@ -1453,6 +1461,12 @@ impl JokerEffects for Jokers {
             Self::MrBones(_) => {
                 // Save-or-self-destruct runs in `Game::handle_score`, where
                 // losing is actually decided.
+                vec![]
+            }
+            Self::CreditCard(_) => {
+                // The debt allowance is a balance-side hook, maintained in
+                // `Game::buy_joker` and `Game::sell_joker`, so there is no
+                // scoring effect to register here.
                 vec![]
             }
             // The blind-start group is driven by `Game::joker_blind_start`,
@@ -1625,6 +1639,7 @@ impl JokerEffects for Jokers {
                 | Self::Hallucination(_)
                 | Self::Showman(_)
                 | Self::MrBones(_)
+                | Self::CreditCard(_)
                 | Self::Blueprint(_)
                 | Self::Brainstorm(_)
         )

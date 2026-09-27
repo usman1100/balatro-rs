@@ -60,8 +60,10 @@ fn render_main(f: &mut Frame, app: &mut AppState, area: Rect) {
     let hands_bonus = app.game.plays * app.game.config.money_per_hand;
     // Seed Money / Money Tree raise the cap, so read the effective one.
     let interest_cap = app.game.interest_max();
-    let interest =
-        ((app.game.money as f32 * app.game.config.interest_rate) as usize).min(interest_cap);
+    // Interest is only ever earned, never charged, so a debt balance
+    // contributes nothing rather than negative interest.
+    let interest = ((app.game.money.max(0) as f32 * app.game.config.interest_rate) as usize)
+        .min(interest_cap);
 
     let block = Block::default()
         .title(Span::styled(

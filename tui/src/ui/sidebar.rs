@@ -226,7 +226,20 @@ fn render_stats(f: &mut Frame, app: &AppState, inner: Rect) {
     ]));
     lines.push(Line::from(vec![
         label("Money    "),
-        value(format!("${}", game.money), Color::Yellow),
+        // A Credit Card can put the balance in debt, which the real game
+        // renders as red.
+        value(
+            if game.money < 0 {
+                format!("-${}", -game.money)
+            } else {
+                format!("${}", game.money)
+            },
+            if game.money < 0 {
+                Color::Red
+            } else {
+                Color::Yellow
+            },
+        ),
     ]));
     lines.push(Line::from(""));
 
