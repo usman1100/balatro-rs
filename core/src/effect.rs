@@ -15,6 +15,16 @@ type CardTriggerFn = Arc<Mutex<dyn Fn(&mut Game, Card, bool) -> usize + Send + '
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuleFlag {
     AllCardsAreFace,
+    /// Splash: every selected card scores, not just the ones that made the
+    /// hand.
+    AllPlayedCardsScore,
+    /// Four Fingers: straights and flushes from four cards.
+    FourCardsMakeStraightsAndFlushes,
+    /// Smeared Joker: Hearts and Diamonds are one suit, Spades and Clubs
+    /// are another.
+    SmearedSuits,
+    /// Shortcut: straights may skip a rank.
+    GappyStraights,
 }
 
 #[derive(Debug, Clone)]

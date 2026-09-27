@@ -123,7 +123,7 @@ impl TarotEffect for Tarot {
                 game.money += total.min(50);
             }
             Self::WheelOfFortune => {
-                if !game.jokers.is_empty() && game.prob_roll(1, 4) {
+                if !game.jokers.is_empty() && game.prob_roll(crate::rng::EffectProc::WheelOfFortune, 1, 4) {
                     let picked = game.backend.pick_random_joker(game.jokers.clone());
                     let edition = game.backend.roll_random_edition();
                     if let Some(j) = game
@@ -172,7 +172,7 @@ impl TarotEffect for Tarot {
             }
             Self::Judgement => {
                 if game.jokers.len() < game.joker_slots() {
-                    let prob_mult = game.prob_mult;
+                    let prob_mult = game.prob_mult();
                     let exclude = game.jokers.clone();
                     let ante = game.ante_current as i32;
                     let joker = game.backend.gen_joker(ante, prob_mult, &exclude);

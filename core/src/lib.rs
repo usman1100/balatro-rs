@@ -10,6 +10,7 @@ pub fn seed_from_str(s: &str) -> u64 {
     h
 }
 pub mod available;
+pub mod boss;
 pub mod card;
 pub mod config;
 pub mod consumable;
@@ -37,6 +38,7 @@ pub mod voucher;
 mod tests {
     use crate::action::Action;
     use crate::consumable::Consumable;
+    use crate::stage::{Blind, End};
     use crate::error::GameError;
     use crate::game::Game;
     use crate::planet::Planets;
@@ -345,6 +347,82 @@ mod tests {
         let actions: Vec<Action> = g.gen_actions().collect();
         // Sigil is 0-target but still touches the hand, so it's not offered from Shop.
         assert!(!actions.contains(&Action::UseConsumable(Consumable::Spectral(Spectral::Sigil))));
+    }
+
+    /// The two public move APIs duplicated the "can I use this consumable"
+    /// rule and the copies drifted: the action-space copy let a hand-touching
+    /// Spectral out during a blind-less stage, and `handle_action` then
+    /// rejected it. Pin both against the same predicate.
+    #[test]
+    fn test_both_move_apis_agree_on_usable_consumables() {
+        use crate::card::{Card, Suit, Value};
+        use crate::consumable::Consumable;
+        use crate::spectral::Spectral;
+        use crate::tarot::Tarot;
+
+        // One at a time, because the action space has a fixed two-slot
+        // consumable bucket and indexing past it is an error, not a skip.
+        let all: Vec<Consumable> = [
+            Consumable::Tarot(Tarot::Death),
+            Consumable::Tarot(Tarot::Fool),
+            Consumable::Spectral(Spectral::Familiar),
+            Consumable::Spectral(Spectral::Sigil),
+            Consumable::Spectral(Spectral::Ankh),
+            Consumable::Planet(crate::planet::Planets::Mercury),
+        ]
+        .into_iter()
+        .collect();
+
+        for stage in [
+            Stage::PreBlind(),
+            Stage::Blind(Blind::Small),
+            Stage::PostBlind(),
+            Stage::Shop(),
+            Stage::PackOpen(),
+            Stage::End(End::Lose),
+        ] {
+            for selected in [0usize, 1, 2] {
+                for c in &all {
+                    let mut g = Game::default();
+                    g.start();
+                    g.stage = stage;
+                    g.consumables = vec![*c];
+                    g.available.extend(
+                        (0..5)
+                            .map(|i| {
+                                Card::new(
+                                    Value::Two,
+                                    if i % 2 == 0 { Suit::Heart } else { Suit::Club },
+                                )
+                            })
+                            .collect(),
+                    );
+                    for card in g.available.not_selected().iter().take(selected) {
+                        g.select_card(*card).expect("select");
+                    }
+
+                    let offered = g.gen_actions().any(|a| a == Action::UseConsumable(*c));
+                    let masked = {
+                        let space = g.gen_action_space();
+                        let vec = space.to_vec();
+                        (0..vec.len())
+                            .filter(|i| vec[*i] == 1)
+                            .filter_map(|i| space.to_action(i, &g).ok())
+                            .any(|a| a == Action::UseConsumable(*c))
+                    };
+                    assert_eq!(
+                        offered, masked,
+                        "{stage:?} with {selected} selected: {c:?} offered by one API but not the other"
+                    );
+                    if offered {
+                        assert!(
+                            g.handle_action(Action::UseConsumable(*c)).is_ok(),
+                            "{stage:?} with {selected} selected: {c:?} was offered but rejected"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -8,6 +8,7 @@ use crate::planet::{Planetarium, Planets};
 use crate::rank::HandRank;
 use crate::rng::{Backend, GeneratedItem, RngBackend};
 use crate::tarot::Tarot;
+use crate::tag::TagState;
 use crate::voucher::{discounted, Voucher, Vouchers};
 use rand::distributions::WeightedIndex;
 use rand::prelude::*;
@@ -80,6 +81,19 @@ pub struct Shop {
     /// across every shop visit of the ante.
     #[cfg_attr(feature = "serde", serde(default))]
     pub voucher: Option<Voucher>,
+    /// A second voucher slot, granted by the Voucher Tag. Never a reroll
+    /// target.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub voucher_tag_offer: Option<Voucher>,
+    /// Coupon Tag: every Joker, consumable and pack here is free. Set when
+    /// the shop is stocked and dropped on reroll, matching the real game
+    /// making only the *initial* stock free.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub couponed: bool,
+    /// Indices into `jokers` that a tag made free, for the Uncommon, Rare
+    /// and edition tags.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub free_joker_slots: std::collections::BTreeSet<usize>,
 }
 
 impl Shop {
@@ -89,10 +103,28 @@ impl Shop {
 }
 
 impl Shop {
-    pub(crate) fn refresh_cards(&mut self, ctx: &ShopContext, backend: &mut Backend) {
+    /// Prices a shop item, honouring the Coupon Tag. `Game` routes every
+    /// purchase through here so a couponed shop is uniformly $0.
+    pub(crate) fn price(&self, game_price: impl Fn(usize) -> usize, cost: usize) -> usize {
+        if self.couponed {
+            0
+        } else {
+            game_price(cost)
+        }
+    }
+
+    pub(crate) fn refresh_cards(
+        &mut self,
+        ctx: &ShopContext,
+        backend: &mut Backend,
+        tags: &mut TagState,
+    ) {
         self.jokers.clear();
         self.consumables.clear();
         self.cards.clear();
+        self.couponed = tags.coupon;
+        self.free_joker_slots.clear();
+        tags.coupon = false;
 
         let mut excl_jokers: Vec<Jokers> = ctx.held_jokers.to_vec();
         let mut excl_tarots: Vec<Tarot> = ctx
@@ -121,6 +153,7 @@ impl Shop {
         for _ in 0..ctx.card_slots() {
             match backend.gen_shop_item(ctx, &excl_jokers, &excl_tarots, &excl_planets) {
                 GeneratedItem::Joker(joker) => {
+                    let joker = self.tag_joker(joker, ctx, backend, tags);
                     excl_jokers.push(joker.clone());
                     self.jokers.push(joker);
                 }
@@ -137,10 +170,50 @@ impl Shop {
         }
     }
 
+    /// Applies whichever tag is waiting on this shop Joker, returning the
+    /// (possibly rewritten) Joker.
+    ///
+    /// Both hooks are per-Joker in the real game, and the Uncommon/Rare one
+    /// has to fire *before* generation: it forces the rarity roll rather
+    /// than filtering afterwards, so the real game never spends that draw.
+    /// `gen_shop_item` has already spent it by the time we get here, which
+    /// is a real-mode accuracy gap.
+    fn tag_joker(
+        &mut self,
+        mut joker: Jokers,
+        ctx: &ShopContext,
+        backend: &mut Backend,
+        tags: &mut TagState,
+    ) -> Jokers {
+        if let Some(rarity) = tags.pending_free_joker.take() {
+            let joker =
+                backend.gen_joker_of_rarity(ctx.ante, ctx.edition_prob_mult(), &[], rarity);
+            let slot = self.jokers.len();
+            self.free_joker_slots.insert(slot);
+            return joker;
+        }
+        if let Some(edition) = tags.pending_edition {
+            // Only the next *base* edition Joker, so an already-rolled
+            // edition tag stays pending for a later slot.
+            if joker.edition() == Edition::Base {
+                joker.set_edition(edition);
+                let slot = self.jokers.len();
+                self.free_joker_slots.insert(slot);
+                tags.pending_edition = None;
+            }
+        }
+        joker
+    }
+
     /// Fills any card slots the shop has gained since it was stocked,
     /// leaving what's already on the shelf alone. Redeeming Overstock
     /// mid-shop is the only thing that widens a live shop.
-    pub(crate) fn top_up_cards(&mut self, ctx: &ShopContext, backend: &mut Backend) {
+    pub(crate) fn top_up_cards(
+        &mut self,
+        ctx: &ShopContext,
+        backend: &mut Backend,
+        tags: &mut TagState,
+    ) {
         let filled = self.jokers.len() + self.consumables.len() + self.cards.len();
         let mut excl_jokers: Vec<Jokers> = ctx.held_jokers.to_vec();
         excl_jokers.extend(self.jokers.clone());
@@ -157,6 +230,7 @@ impl Shop {
         for _ in filled..ctx.card_slots() {
             match backend.gen_shop_item(ctx, &excl_jokers, &excl_tarots, &excl_planets) {
                 GeneratedItem::Joker(joker) => {
+                    let joker = self.tag_joker(joker, ctx, backend, tags);
                     excl_jokers.push(joker.clone());
                     self.jokers.push(joker);
                 }
@@ -173,8 +247,13 @@ impl Shop {
         }
     }
 
-    pub(crate) fn refresh(&mut self, ctx: &ShopContext, backend: &mut Backend) {
-        self.refresh_cards(ctx, backend);
+    pub(crate) fn refresh(
+        &mut self,
+        ctx: &ShopContext,
+        backend: &mut Backend,
+        tags: &mut TagState,
+    ) {
+        self.refresh_cards(ctx, backend, tags);
 
         let p1 = backend.gen_pack(ctx, None);
         let exclude = (&p1.category, &p1.size);
@@ -241,16 +320,18 @@ impl Shop {
     }
 
     /// Takes the offered voucher off the shelf. Unlike the other buys it
-    /// clears the slot rather than removing from a list — there is only
-    /// ever one voucher on offer per ante.
+    /// clears the slot rather than removing from a list — one voucher per
+    /// ante, plus a second while a Voucher Tag is outstanding.
     pub(crate) fn buy_voucher(&mut self, voucher: &Voucher) -> Result<Voucher, GameError> {
-        match self.voucher {
-            Some(v) if v == *voucher => {
-                self.voucher = None;
-                Ok(v)
-            }
-            _ => Err(GameError::NoVoucherMatch),
+        if self.voucher == Some(*voucher) {
+            self.voucher = None;
+            return Ok(*voucher);
         }
+        if self.voucher_tag_offer == Some(*voucher) {
+            self.voucher_tag_offer = None;
+            return Ok(*voucher);
+        }
+        Err(GameError::NoVoucherMatch)
     }
 
     pub(crate) fn gen_moves_buy_joker(
@@ -332,8 +413,16 @@ impl Shop {
         balance: usize,
     ) -> Option<impl Iterator<Item = Action>> {
         // Vouchers are never discounted, so no `Vouchers` argument here.
-        let voucher = self.voucher.filter(|v| v.cost() <= balance)?;
-        Some(std::iter::once(Action::BuyVoucher(voucher)))
+        let affordable = [self.voucher, self.voucher_tag_offer]
+            .into_iter()
+            .flatten()
+            .filter(|v| v.cost() <= balance)
+            .map(Action::BuyVoucher)
+            .collect::<Vec<_>>();
+        if affordable.is_empty() {
+            return None;
+        }
+        Some(affordable.into_iter())
     }
 }
 
@@ -563,6 +652,27 @@ impl PackGenerator {
     // Standard/Arcana/Celestial: Normal=4.0, Jumbo=2.0, Mega=0.5 -> 400,200,50
     // Buffoon: Normal=1.2, Jumbo=0.6, Mega=0.15 -> 120,60,15
     // Spectral: Normal=0.6, Jumbo=0.3, Mega=0.07 -> 60,30,7
+    /// Skips the weighted category/size roll, for the pack tags which name
+    /// both outright.
+    pub(crate) fn gen_pack_of(
+        &self,
+        planetarium: &Planetarium,
+        prob_mult: u32,
+        category: PackCategory,
+        size: PackSize,
+        held_jokers: &[Jokers],
+        rng: &mut impl Rng,
+    ) -> Pack {
+        let count = balatro_seed::pack_card_count(category, size) as usize;
+        let contents =
+            self.gen_contents(&category, count, planetarium, prob_mult, held_jokers, rng);
+        Pack {
+            category,
+            size,
+            contents,
+        }
+    }
+
     pub(crate) fn gen_pack(
         &self,
         planetarium: &Planetarium,
@@ -680,7 +790,7 @@ mod tests {
         assert_eq!(shop.packs.len(), 0);
         let vouchers = Vouchers::new();
         let ctx = ShopContext::for_test(&planetarium, &vouchers, 1);
-        shop.refresh(&ctx, &mut fast_backend());
+        shop.refresh(&ctx, &mut fast_backend(), &mut TagState::default());
         assert_eq!(shop.jokers.len() + shop.consumables.len(), 2);
         assert_eq!(shop.packs.len(), 2);
     }
@@ -730,7 +840,7 @@ mod tests {
         let planetarium = Planetarium::new();
         let vouchers = Vouchers::new();
         let ctx = ShopContext::for_test(&planetarium, &vouchers, 1);
-        shop.refresh(&ctx, &mut fast_backend());
+        shop.refresh(&ctx, &mut fast_backend(), &mut TagState::default());
         assert_eq!(shop.packs.len(), 2);
         let p1 = shop.packs[0].clone();
         let bought = shop.buy_pack(&p1).expect("buy pack");
@@ -760,7 +870,7 @@ mod tests {
         let planetarium = Planetarium::new();
         let vouchers = Vouchers::new();
         let ctx = ShopContext::for_test(&planetarium, &vouchers, 1);
-        shop.refresh(&ctx, &mut fast_backend());
+        shop.refresh(&ctx, &mut fast_backend(), &mut TagState::default());
         // slots full (held == consumable_slots)
         let moves = shop.gen_moves_buy_consumable(100, 2, 2, &vouchers);
         assert!(moves.is_none());
@@ -772,7 +882,7 @@ mod tests {
         let planetarium = Planetarium::new();
         let vouchers = Vouchers::new();
         let ctx = ShopContext::for_test(&planetarium, &vouchers, 1);
-        shop.refresh(&ctx, &mut fast_backend());
+        shop.refresh(&ctx, &mut fast_backend(), &mut TagState::default());
         // 0 money can't afford any planet ($3)
         let moves: Option<Vec<Action>> = shop
             .gen_moves_buy_consumable(0, 2, 0, &vouchers)

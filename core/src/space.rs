@@ -27,21 +27,21 @@ const PACK_CONTENTS_MAX: usize = 5;
 // 78: select blind
 // 79: skip blind
 // 80-81: buy consumable
-// 82: buy voucher
-// 83-86: buy playing card
-// 87-88: use consumable
-// 89: apply tarot
-// 90-94: sell joker
-// 95-96: sell consumable
-// 97-98: buy pack
-// 99-103: pick pack card
-// 104: skip pack
-// 105: sort hand (rank)
-// 106: sort hand (suit)
-// 107: reroll
-// 108: apply spectral
+// 82-83: buy voucher (the Voucher Tag gives a second offer)
+// 84-87: buy playing card
+// 88-89: use consumable
+// 90: apply tarot
+// 91-95: sell joker
+// 96-97: sell consumable
+// 98-99: buy pack
+// 100-104: pick pack card
+// 105: skip pack
+// 106: sort hand (rank)
+// 107: sort hand (suit)
+// 108: reroll
+// 109: apply spectral
 //
-// We end up with a vector of length 109 where each index
+// We end up with a vector of length 110 where each index
 // represents a potential action.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "python", pyclass(eq))]
@@ -349,8 +349,20 @@ impl ActionSpace {
         Ok(())
     }
 
-    pub(crate) fn unmask_buy_voucher(&mut self) {
-        self.buy_voucher[0] = 1;
+    /// Unmasks the voucher slots that actually have an affordable offer.
+    pub(crate) fn unmask_buy_voucher(&mut self, game: &Game) {
+        for (slot, offer) in [game.shop.voucher, game.shop.voucher_tag_offer]
+            .into_iter()
+            .enumerate()
+            .filter_map(|(slot, offer)| offer.map(|v| (slot, v)))
+        {
+            let Some(bit) = self.buy_voucher.get_mut(slot) else {
+                break;
+            };
+            if offer.cost() <= game.money {
+                *bit = 1;
+            }
+        }
     }
 
     pub(crate) fn unmask_buy_playing_card(&mut self, i: usize) -> Result<(), ActionSpaceError> {
@@ -491,10 +503,19 @@ impl ActionSpace {
             n if !self.buy_voucher.is_empty()
                 && (self.buy_voucher_min()..=self.buy_voucher_max()).contains(&n) =>
             {
-                game.shop
-                    .voucher
-                    .map(Action::BuyVoucher)
-                    .ok_or(ActionSpaceError::InvalidActionConversion)
+                let n_offset = n - self.buy_voucher_min();
+                match n_offset {
+                    0 => game
+                        .shop
+                        .voucher
+                        .map(Action::BuyVoucher)
+                        .ok_or(ActionSpaceError::InvalidActionConversion),
+                    _ => game
+                        .shop
+                        .voucher_tag_offer
+                        .map(Action::BuyVoucher)
+                        .ok_or(ActionSpaceError::InvalidActionConversion),
+                }
             }
             n if !self.buy_playing_card.is_empty()
                 && (self.buy_playing_card_min()..=self.buy_playing_card_max()).contains(&n) =>
@@ -624,7 +645,7 @@ impl From<Config> for ActionSpace {
             skip_blind: vec![0; 1],
             buy_consumable: vec![0; c.consumable_slots],
             // One voucher on offer per ante, at most.
-            buy_voucher: vec![0; 1],
+            buy_voucher: vec![0; 2],
             // Magic Trick can turn every shop card slot into a playing card.
             buy_playing_card: vec![0; c.store_consumable_slots_max],
             use_consumable: vec![0; c.consumable_slots],
@@ -714,13 +735,13 @@ mod tests {
         let a = ActionSpace::from(c.clone());
         // 24 select + 23 move_left + 23 move_right + 1 play + 1 discard
         // + 1 cashout + 4 buy_joker + 1 next_round + 1 select_blind + 1 skip_blind
-        // + 2 buy_consumable + 1 buy_voucher + 4 buy_playing_card
+        // + 2 buy_consumable + 2 buy_voucher + 4 buy_playing_card
         // + 2 use_consumable + 1 apply_tarot
         // + 5 sell_joker + 2 sell_consumable
         // + 2 buy_pack + 5 pick_pack_card + 1 skip_pack + 2 sort_hand + 1 reroll
-        // + 1 apply_spectral = 109
-        assert_eq!(a.size(), 109);
-        assert_eq!(a.to_vec().len(), 109);
+        // + 1 apply_spectral = 110
+        assert_eq!(a.size(), 110);
+        assert_eq!(a.to_vec().len(), 110);
     }
 
     #[test]

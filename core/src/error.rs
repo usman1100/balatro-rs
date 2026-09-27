@@ -4,7 +4,7 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use thiserror::Error;
 
-#[derive(Error, Debug, Clone)]
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum PlayHandError {
     #[error("Played hand contains more than 5 cards")]
     TooManyCards,
@@ -12,6 +12,15 @@ pub enum PlayHandError {
     NoCards,
     #[error("Played hand could not determine best hand")]
     UnknownHand,
+    /// The Eye: the same hand type was played last this blind.
+    #[error("The Eye forbids repeating a hand type in a row")]
+    EyeRepeatRank,
+    /// The Mouth: only the first played hand's type is legal.
+    #[error("The Mouth only allows the first played hand's type")]
+    MouthRankMismatch,
+    /// The Psychic: every hand must be exactly five cards.
+    #[error("The Psychic requires exactly 5 cards")]
+    PsychicWrongCardCount,
 }
 
 #[derive(Error, Debug, Clone)]
@@ -50,6 +59,9 @@ pub enum GameError {
     InvalidSelectCard,
     #[error("Invalid action space")]
     InvalidActionSpace,
+    /// The Cerulean Bell's pinned card cannot be deselected.
+    #[error("This card is forced to stay selected by The Cerulean Bell")]
+    ForcedCardStaysSelected,
 }
 
 impl std::convert::From<ActionSpaceError> for GameError {

@@ -1,23 +1,24 @@
 use crate::action::{Action, MoveDirection};
 use crate::ante::Ante;
 use crate::available::Available;
-use crate::card::{card_display, Card, Edition, Enhancement, Seal, Suit};
+use crate::boss::BossState;
+use crate::card::{card_display, Card, Edition, Enhancement, Seal, Suit, Value};
 use crate::config::{Config, RngMode};
 use crate::consumable::Consumable;
 use crate::deck::Deck;
 use crate::effect::{EffectRegistry, Effects, RuleFlag};
-use crate::error::GameError;
-use crate::hand::{MadeHand, SelectHand};
-use crate::joker::{joker_display, JokerEffects, JokerState, Jokers};
-use crate::pack::{OpenPackState, Pack, PackCategory, PackContent};
+use crate::error::{GameError, PlayHandError};
+use crate::hand::{HandRules, MadeHand, SelectHand};
+use crate::joker::{joker_display, JokerEffects, JokerState, Jokers, Rarity};
+use crate::pack::{OpenPackState, Pack, PackCategory, PackContent, PackSize};
 use crate::planet::Planetarium;
 use crate::rank::HandRank;
-use crate::rng::{Backend, FastBackend, RealBackend, RngBackend};
+use crate::rng::{Backend, EffectProc, FastBackend, RealBackend, RngBackend};
 use crate::score::{ScoreSource, ScoreStep, ScoreTrace};
 use crate::shop::{Shop, ShopContext};
 use crate::spectral::SpectralEffect;
 use crate::stage::{Blind, BlindExt, End, Stage};
-use crate::tag::Tag;
+use crate::tag::{Tag, TagState};
 use crate::tarot::{Tarot, TarotEffect};
 use crate::voucher::{Voucher, Vouchers};
 
@@ -33,6 +34,24 @@ fn default_backend() -> Backend {
     Backend::Fast(FastBackend::new(ChaCha8Rng::from_entropy()))
 }
 
+/// The real game's own values for the tags that name a count.
+const ORBITAL_TAG_LEVELS: usize = 3;
+const TOP_UP_TAG_JOKERS: usize = 2;
+const INVESTMENT_TAG_DOLLARS: usize = 25;
+
+/// The Psychic's hand size, and how many cards The Hook discards after
+/// each played hand.
+pub(crate) const PSYCHIC_HAND_SIZE: usize = 5;
+const HOOK_DISCARDS: usize = 2;
+const TO_THE_MOON_PER_DOLLAR: usize = 5;
+const MISPRINT_MIN: i32 = 0;
+const RIFF_RAFF_JOKERS: usize = 2;
+const MADNESS_MULT_STEP: f32 = 0.5;
+const CEREMONIAL_DAGGER_VALUE_MULT: usize = 2;
+const INVISIBLE_JOKER_ROUNDS: usize = 2;
+const MR_BONES_DIVISOR: usize = 4;
+const MISPRINT_MAX: i32 = 23;
+
 fn default_reroll_cost() -> usize {
     5
 }
@@ -47,6 +66,16 @@ pub struct Game {
     pub available: Available,
     pub discarded: Vec<Card>,
     pub tags: Vec<Tag>,
+    /// Tags granted outside a skip, e.g. Diet Cola's. Drained into `tags`
+    /// at the next cash out, which is when tags are collected.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) pending_tags: Vec<Tag>,
+    /// Tag effects waiting on a later shop, blind or round.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) tag_state: TagState,
+    /// What the current boss blind remembers between hands.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) boss_state: BossState,
     pub small_blind_tag: Tag,
     pub big_blind_tag: Tag,
     pub blind: Option<Blind>,
@@ -86,7 +115,9 @@ pub struct Game {
     pub chips: usize,
     pub mult: usize,
     pub score: usize,
-    pub prob_mult: u32,
+    /// Baseline probability multiplier. [`Game::prob_mult`] is what
+    /// everything should read: it also folds in Oops! All 6s.
+    pub prob_mult_base: u32,
 
     // shared game-level history some jokers key off (RideTheBus, Obelisk, etc)
     #[cfg_attr(feature = "serde", serde(default))]
@@ -101,9 +132,52 @@ pub struct Game {
     // run total of cards discarded (Discard action only), never reset.
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) total_cards_discarded: usize,
-    // set when Luchador is sold, disables the current Boss Blind's effect
+    // Run totals the Handy / Garbage / Speed tags pay out against.
     #[cfg_attr(feature = "serde", serde(default))]
-    pub(crate) boss_disabled_by_luchador: bool,
+    pub(crate) hands_played_this_run: usize,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) unused_discards_this_run: usize,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) blinds_skipped_this_run: usize,
+    // Run counters the accumulating jokers key off.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) rounds_played: usize,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) planets_used_this_run: usize,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) tarots_used_this_run: usize,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) cards_added_this_ante: usize,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) glass_cards_destroyed: usize,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) lucky_triggers: usize,
+    /// Campfire's count of cards sold, reset when a boss blind falls.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) campfire_sold: usize,
+    /// The ante Hologram was bought in; it only fires there. Set on
+    /// purchase, so buying two in different antes keeps both working.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) hologram_antes: Vec<Ante>,
+    /// Rerolls taken in the shop being stood in, for Flash Card.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) free_rerolls_this_round: usize,
+    /// Face cards destroyed this run, for Canio.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) face_cards_destroyed: usize,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) rerolls_this_shop: usize,
+    /// Burnt Joker's first discard of the round levels a hand.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) burnt_joker_armed: bool,
+    /// Hands in the current round, for Oops! All 6s-style procs.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) hands_played_this_round: usize,
+    // Set when the current Boss Blind's effect is switched off mid-round:
+    // Luchador sold, or any Joker sold while Verdant Leaf is up. Chicot
+    // does the same thing but is derived from the joker list, not stored.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) boss_disabled: bool,
     // set when a boss's ability actually triggered (Matador's trigger condition).
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) boss_triggered_this_hand: bool,
@@ -119,8 +193,9 @@ pub struct Game {
     #[cfg_attr(feature = "serde", serde(default))]
     pub seed_str: Option<String>,
     // The one source of randomness for everything. shop/pack generation,
-    // deck shuffling, prob_roll, tag draws, seal-triggered consumables,
-    // discard-selector rolls, etc.
+    // tag draws, effect procs, seal-triggered consumables, discard-selector
+    // rolls, etc. `RngMode::Real` routes the draws that have a real node
+    // through `balatro-seed` and leaves the rest on a fast stream.
     #[cfg_attr(feature = "serde", serde(default = "default_backend"))]
     pub(crate) backend: Backend,
     // track stage so we can come back to it after temp tarot stage
@@ -167,6 +242,7 @@ impl Game {
             available: Available::default(),
             discarded: Vec::new(),
             tags: Vec::new(),
+            pending_tags: Vec::new(),
             small_blind_tag: Tag::Uncommon,
             big_blind_tag: Tag::Uncommon,
             action_history: Vec::new(),
@@ -189,13 +265,31 @@ impl Game {
             chips: config.base_chips,
             mult: config.base_mult,
             score: config.base_score,
-            prob_mult: 1,
+            prob_mult_base: 1,
             hand_ranks_played_this_round: HashSet::new(),
             consecutive_hands_without_face_card: 0,
             consecutive_hands_not_most_played_type: 0,
             discarded_this_round: Vec::new(),
             total_cards_discarded: 0,
-            boss_disabled_by_luchador: false,
+            hands_played_this_run: 0,
+            unused_discards_this_run: 0,
+            blinds_skipped_this_run: 0,
+            rounds_played: 0,
+            planets_used_this_run: 0,
+            tarots_used_this_run: 0,
+            cards_added_this_ante: 0,
+            glass_cards_destroyed: 0,
+            lucky_triggers: 0,
+            campfire_sold: 0,
+            hologram_antes: Vec::new(),
+            rerolls_this_shop: 0,
+            free_rerolls_this_round: 0,
+            face_cards_destroyed: 0,
+            burnt_joker_armed: false,
+            hands_played_this_round: 0,
+            tag_state: TagState::default(),
+            boss_state: BossState::default(),
+            boss_disabled: false,
             boss_triggered_this_hand: false,
             last_consumable_used: None,
             last_score: 0,
@@ -208,8 +302,8 @@ impl Game {
             backend,
             config,
         };
-        game.draw_ante_tags();
-        game.draw_ante_boss();
+        game.backend.on_run_start();
+        game.start_ante();
         game
     }
 
@@ -237,10 +331,16 @@ impl Game {
     // Negative-edition jokers, which predates vouchers.)
 
     /// Hand size dealt each round — Paint Brush / Palette raise the
-    /// baseline; Manacle (while active) then subtracts one from that.
+    /// baseline, the Juggle Tag adds 3 for the round it was collected in;
+    /// Manacle (while active) then subtracts one from that.
     pub fn hand_size(&self) -> usize {
-        let base = (self.config.available + self.vouchers.hand_size_bonus())
+        let base = self
+            .config
+            .available
+            .saturating_add(self.vouchers.hand_size_bonus())
+            .saturating_add_signed(self.joker_hand_size_bonus())
             .min(self.config.available_max);
+        let base = base.saturating_add(self.tag_state.hand_size_bonus);
         if self.active_boss() == Some(BossBlind::Manacle) {
             base.saturating_sub(1)
         } else {
@@ -261,20 +361,221 @@ impl Game {
     }
 
     /// Hands per round — Grabber/Nacho Tong add, Hieroglyph subtracts.
-    /// Never drops below one; a run with no hands is unplayable.
+    /// Never drops below one; a run with no hands is unplayable. The
+    /// Needle overrides it entirely, rather than adjusting it.
     pub fn plays_per_round(&self) -> usize {
-        Self::apply_delta(self.config.plays, self.vouchers.hands_delta()).max(1)
+        if self.active_boss() == Some(BossBlind::Needle) {
+            return 1;
+        }
+        Self::apply_delta(
+            self.config.plays,
+            self.vouchers.hands_delta() + self.joker_hands_delta(),
+        )
+        .max(1)
     }
 
     /// Discards per round — Wasteful/Recyclomancy add, Petroglyph
     /// subtracts. May legitimately reach zero.
     pub fn discards_per_round(&self) -> usize {
-        Self::apply_delta(self.config.discards, self.vouchers.discards_delta())
+        Self::apply_delta(
+            self.config.discards,
+            self.vouchers.discards_delta() + self.joker_discards_delta(),
+        )
     }
 
     /// Interest cap at cash out — Seed Money / Money Tree raise it.
     pub fn interest_max(&self) -> usize {
         self.config.interest_max + self.vouchers.interest_cap_bonus()
+    }
+
+    /// Which hand-shape rules the four partial-hand jokers put in force.
+    /// Read from the effect registry, which is rebuilt on every joker
+    /// change, so buying or selling one takes effect immediately.
+    pub fn hand_rules(&self) -> HandRules {
+        let has = |flag| self.effect_registry.rule_flags.contains(&flag);
+        HandRules {
+            hand_size: if has(RuleFlag::FourCardsMakeStraightsAndFlushes) {
+                4
+            } else {
+                5
+            },
+            gappy_straights: has(RuleFlag::GappyStraights),
+            smeared_suits: has(RuleFlag::SmearedSuits),
+        }
+    }
+
+    /// The run's probability multiplier. Oops! All 6s doubles every listed
+    /// probability, and several can be owned, so this doubles per copy.
+    /// Distinct planet cards used this run, for Satellite. Each planet
+    /// levels exactly one hand, so a hand with any plays means its planet
+    /// was used. Royal Flush shares Straight Flush's storage.
+    pub(crate) fn distinct_planets_used(&self) -> usize {
+        HandRank::iter()
+            .filter(|r| *r != HandRank::RoyalFlush)
+            .filter(|r| self.planetarium.level(*r).plays > 0)
+            .count()
+    }
+
+    /// Whether the run is inside an ante a Hologram was bought in.
+    pub(crate) fn hologram_active(&self) -> bool {
+        self.hologram_antes.contains(&self.ante_current)
+    }
+
+    /// Misprint's +0-23, through the real game's own node where possible.
+    pub(crate) fn misprint_roll(&mut self) -> i32 {
+        self.backend
+            .roll_range(EffectProc::Misprint, MISPRINT_MIN, MISPRINT_MAX)
+    }
+
+    pub fn prob_mult(&self) -> u32 {
+        let oops = self
+            .jokers
+            .iter()
+            .filter(|j| matches!(j, Jokers::OopsAllSixes(_)))
+            .count() as u32;
+        self.prob_mult_base.saturating_mul(1u32 << oops.min(16))
+    }
+
+    /// Hand size from Jokers, on top of the voucher baseline. Signed,
+    /// because Merry Andy and Stuntman take as much as they give.
+    pub fn joker_hand_size_bonus(&self) -> isize {
+        self.jokers
+            .iter()
+            .map(|j| match j {
+                Jokers::Juggler(_) => 1,
+                Jokers::MerryAndy(_) => -1,
+                Jokers::Troubadour(_) => 2,
+                Jokers::Stuntman(_) => -2,
+                // Turtle Bean shrinks by one each round, tracked on the joker.
+                Jokers::TurtleBean(bean) => (bean.state.counter as isize) + 5,
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// Hands per round from Jokers. Troubadour takes one away each round.
+    pub fn joker_hands_delta(&self) -> isize {
+        self.jokers
+            .iter()
+            .map(|j| match j {
+                Jokers::Troubadour(t) => -1 - (t.state.counter as isize),
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// Discards per round from Jokers.
+    pub fn joker_discards_delta(&self) -> isize {
+        self.jokers
+            .iter()
+            .map(|j| match j {
+                Jokers::Drunkard(_) => 1,
+                Jokers::MerryAndy(_) => 3,
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// Interest beyond the normal cap: To the Moon pays $1 per $5 held.
+    pub fn joker_interest_bonus(&self) -> usize {
+        if !self.jokers.iter().any(|j| matches!(j, Jokers::ToTheMoon(_))) {
+            return 0;
+        }
+        self.money / TO_THE_MOON_PER_DOLLAR
+    }
+
+    /// Astronomer: every Planet card and Celestial Pack in the shop is free.
+    pub fn celestial_packs_are_free(&self) -> bool {
+        self.jokers
+            .iter()
+            .any(|j| matches!(j, Jokers::Astronomer(_)))
+    }
+
+    /// A tag waiting to be collected, granted out of band by Diet Cola.
+    pub(crate) fn grant_free_double_tag(&mut self) {
+        self.pending_tags.push(Tag::Double);
+    }
+
+    /// Slot of a Joker in the joker row, which is what "to the right of"
+    /// and "leftmost" resolve against.
+    pub(crate) fn joker_slot(&self, id: usize) -> Option<usize> {
+        self.jokers.iter().position(|j| j.instance_id() == id)
+    }
+
+    /// The Joker immediately to the right of `id`, wrapping is not a thing
+    /// in the real game — the row just ends.
+    pub(crate) fn joker_to_the_right(&self, id: usize) -> Option<Jokers> {
+        let slot = self.joker_slot(id)?;
+        self.jokers.get(slot + 1).cloned()
+    }
+
+    pub(crate) fn leftmost_joker(&self) -> Option<Jokers> {
+        self.jokers.first().cloned()
+    }
+
+    /// Removes a Joker from the row, as a destruction effect would.
+    pub(crate) fn destroy_joker(&mut self, id: usize) -> Option<Jokers> {
+        let slot = self.joker_slot(id)?;
+        let removed = self.jokers.remove(slot);
+        if removed.edition() == Edition::Negative {
+            self.config.joker_slots = self.config.joker_slots.saturating_sub(1);
+        }
+        self.effect_registry
+            .register_jokers(self.jokers.clone(), &self.clone());
+        Some(removed)
+    }
+
+    /// Adds a playing card straight to the deck, as Hiker and DNA do.
+    pub(crate) fn add_card_to_deck(&mut self, card: Card) {
+        self.deck.push(card);
+    }
+
+    /// Invisible Joker's payoff: a copy of a random owned Joker, with any
+    /// Negative edition stripped as the real game does.
+    pub(crate) fn duplicate_random_joker(&mut self) {
+        if self.jokers.len() >= self.joker_slots() {
+            return;
+        }
+        if self.jokers.is_empty() {
+            return;
+        }
+        let picked = self.backend.pick_random_joker(self.jokers.clone());
+        let mut copy = picked.clone();
+        copy.set_instance_id(crate::joker::mint_joker_id());
+        if copy.edition() == Edition::Negative {
+            copy.set_edition(Edition::Base);
+            self.config.joker_slots = self.config.joker_slots.saturating_sub(1);
+        }
+        self.jokers.push(copy);
+        self.effect_registry
+            .register_jokers(self.jokers.clone(), &self.clone());
+    }
+
+    /// A copy of a held playing card, for DNA.
+    pub(crate) fn copy_of_card(&self, card: &Card) -> Card {
+        let mut copy = Card::new(card.value, card.suit);
+        copy.edition = card.edition;
+        copy.enhancement = card.enhancement;
+        copy.seal = card.seal;
+        copy
+    }
+
+    /// Certificate, Cartomancer, Chaotic and friends need a live tarot, so
+    /// the helper they share.
+    pub(crate) fn add_tarot(&mut self) {
+        if self.consumables.len() >= self.consumable_slots() {
+            return;
+        }
+        let consumable = self.backend.roll_random_tarot(&[]);
+        self.consumables.push(consumable);
+    }
+
+    pub(crate) fn add_spectral(&mut self) {
+        if self.consumables.len() >= self.consumable_slots() {
+            return;
+        }
+        let consumed = self.backend.roll_random_spectral(&[]);
+        self.consumables.push(consumed);
     }
 
     /// What the next reroll in a fresh shop costs, before the per-reroll
@@ -312,7 +613,7 @@ impl Game {
             held_consumables,
             held_jokers,
             vouchers,
-            prob_mult: self.prob_mult,
+            prob_mult: self.prob_mult(),
             ante: self.ante_current as i32,
             most_played: self.most_played_hand_rank(),
         }
@@ -322,6 +623,8 @@ impl Game {
     // cards are swapped out and replacements drawn in. `self.available` still
     // reflects what was actually held in hand at the moment the round ended.
     fn handle_round_end(&mut self) {
+        self.rounds_played += 1;
+        self.free_rerolls_this_round = 0;
         for e in self.effect_registry.on_round_end.clone() {
             if let Effects::OnRoundEnd(f) = e {
                 f.lock().unwrap()(self)
@@ -343,17 +646,23 @@ impl Game {
         self.discards_remaining = self.discards_per_round();
         self.hand_ranks_played_this_round.clear();
         self.discarded_this_round.clear();
-        self.boss_disabled_by_luchador = false;
+        self.hands_played_this_round = 0;
+        self.boss_disabled = false;
         self.deck.append(&mut self.discarded);
         self.deck.extend(self.available.cards());
         self.available.empty();
+        for card in self.discarded.iter_mut() {
+            card.face_down = false;
+        }
+        self.deck.clear_face_down();
         self.backend.shuffle_deck(&mut self.deck);
         self.roll_discard_selectors();
     }
 
     /// The boss currently in effect, or `None` if we're not in the middle of
-    /// that boss's own round, or its effect is disabled (Chicot held, or
-    /// Luchador sold this Boss Blind).
+    /// that boss's own round, or its effect is disabled. Three things
+    /// disable a boss in the real game and all share one mechanism: Chicot
+    /// held, Luchador sold, and any Joker sold while Verdant Leaf is up.
     pub(crate) fn active_boss(&self) -> Option<BossBlind> {
         if self.blind != Some(Blind::Boss) {
             return None;
@@ -361,7 +670,7 @@ impl Game {
         if self.jokers.iter().any(|j| matches!(j, Jokers::Chicot(_))) {
             return None;
         }
-        if self.boss_disabled_by_luchador {
+        if self.boss_disabled {
             return None;
         }
         self.current_boss
@@ -387,7 +696,14 @@ impl Game {
 
     // draw from deck to available
     fn draw(&mut self, count: usize) {
-        self.available.extend(self.deck.draw(count));
+        let drawn = self.deck.draw(count);
+        let face_down: Vec<bool> = drawn.iter().map(|c| self.stays_face_down(c)).collect();
+        let mut drawn = drawn;
+        for (card, down) in drawn.iter_mut().zip(face_down) {
+            card.face_down = down;
+        }
+        self.available.extend(drawn);
+        self.boss_force_selection();
     }
 
     // shuffle and deal new cards to available
@@ -414,6 +730,35 @@ impl Game {
         self.available.select_card(card)
     }
 
+    pub(crate) fn deselect_card(&mut self, card: Card) -> Result<(), GameError> {
+        // The Cerulean Bell's card cannot be released while the boss is up.
+        if self.active_boss() == Some(BossBlind::CeruleanBell)
+            && self.boss_state.forced_card == Some(card.id)
+        {
+            return Err(GameError::ForcedCardStaysSelected);
+        }
+        self.available.deselect_card(card)
+    }
+
+    /// The Cerulean Bell pins one card of the hand selected. Called when the
+    /// blind starts and again after every redraw, since the forced card is
+    /// whichever is chosen afresh each time.
+    fn boss_force_selection(&mut self) {
+        self.boss_state.forced_card = None;
+        if self.active_boss() != Some(BossBlind::CeruleanBell) {
+            return;
+        }
+        let cards = self.available.cards();
+        if cards.is_empty() {
+            return;
+        }
+        let idx = self.backend.random_index(cards.len());
+        let card = cards[idx];
+        self.boss_state.forced_card = Some(card.id);
+        // Already selected? Then the pin is a no-op.
+        let _ = self.available.select_card(card);
+    }
+
     pub(crate) fn move_card(
         &mut self,
         direction: MoveDirection,
@@ -426,17 +771,25 @@ impl Game {
         if self.plays == 0 {
             return Err(GameError::NoRemainingPlays);
         }
+        self.check_boss_hand_legal()?;
         self.plays -= 1;
+        self.hands_played_this_run += 1;
+        self.hands_played_this_round += 1;
         let selected = SelectHand::new(self.available.selected());
-        let best = selected.best_hand()?;
+        let best = selected.best_hand_with(self.hand_rules())?;
+        let rank = best.rank;
+        self.check_boss_hand_rank(rank)?;
         let scored = best.clone();
         let score = self.calc_score(best);
+        let on_play = self.boss_on_play(rank, &self.available.selected());
+        self.boss_record_rank(rank);
         let clear_blind = self.handle_score(score)?;
         // must run before the discard/redraw below: self.available still reflects
         // the cards actually held when the round ended, not their replacements.
         if clear_blind {
             self.handle_round_end();
         }
+        self.joker_first_hand(&self.available.selected());
         self.discarded.extend(self.available.selected());
         let removed = self.available.remove_selected();
         let n = if self.active_boss() == Some(BossBlind::Serpent) {
@@ -446,14 +799,162 @@ impl Game {
         };
         self.draw(n);
         for card in scored.hand.cards() {
-            if card.enhancement == Some(Enhancement::Glass) && self.prob_roll(1, 4) {
+            if card.enhancement == Some(Enhancement::Glass)
+                && self.prob_roll(EffectProc::GlassCardBreak, 1, 4)
+            {
+                self.glass_cards_destroyed += 1;
                 self.destroy_card(card.id);
             }
         }
+        on_play(self);
         if clear_blind {
             self.clear_blind();
         }
         Ok(())
+    }
+
+    /// Bosses that constrain the shape of the hand, checked before anything
+    /// is spent.
+    fn check_boss_hand_legal(&self) -> Result<(), GameError> {
+        if self.active_boss() == Some(BossBlind::Psychic) {
+            let n = self.available.selected().len();
+            if n != PSYCHIC_HAND_SIZE {
+                return Err(GameError::InvalidHand(PlayHandError::PsychicWrongCardCount));
+            }
+        }
+        Ok(())
+    }
+
+    /// Bosses that constrain the hand *type*, checked once the type is known
+    /// but before any score is banked.
+    pub(crate) fn check_boss_hand_rank(&self, rank: HandRank) -> Result<(), GameError> {
+        match self.active_boss() {
+            Some(BossBlind::Eye) if self.boss_state.last_played == Some(rank) => {
+                Err(GameError::InvalidHand(PlayHandError::EyeRepeatRank))
+            }
+            Some(BossBlind::Mouth) => match self.boss_state.locked_rank {
+                Some(locked) if locked != rank => {
+                    Err(GameError::InvalidHand(PlayHandError::MouthRankMismatch))
+                }
+                _ => Ok(()),
+            },
+            _ => Ok(()),
+        }
+    }
+
+    fn boss_record_rank(&mut self, rank: HandRank) {
+        if self.active_boss() != Some(BossBlind::Eye) && self.active_boss() != Some(BossBlind::Mouth)
+        {
+            return;
+        }
+        if self.active_boss() == Some(BossBlind::Mouth) {
+            self.boss_state.locked_rank.get_or_insert(rank);
+        }
+        self.boss_state.last_played = Some(rank);
+    }
+
+    /// The Crimson Heart re-picks its victim at the start of every hand, and
+    /// only ever debuffs one Joker at a time.
+    fn boss_crimson_heart(&mut self) {
+        if self.active_boss() != Some(BossBlind::CrimsonHeart) {
+            self.boss_state.debuffed_joker = None;
+            return;
+        }
+        let previous = self.boss_state.debuffed_joker.take();
+        if self.jokers.is_empty() {
+            return;
+        }
+        // The real game debuffs every non-debuffed Joker, then picks one, and
+        // falls back to the full set when that leaves nothing — so a lone
+        // Joker stays debuffed.
+        let mut pool: Vec<Jokers> = self
+            .jokers
+            .iter()
+            .filter(|j| {
+                previous
+                    .as_ref()
+                    .is_none_or(|d| d.instance_id() != j.instance_id())
+            })
+            .cloned()
+            .collect();
+        if pool.is_empty() {
+            pool = self.jokers.clone();
+        }
+        let idx = self.backend.random_index(pool.len());
+        self.boss_state.debuffed_joker = Some(pool[idx].clone());
+    }
+
+    /// Boss effects that fire on a played hand. Returned as a closure so
+    /// they land after scoring, matching the real game: Pillar's flag is
+    /// set once the cards have scored, and The Hook discards after the
+    /// hand's own redraw.
+    fn boss_on_play(&mut self, rank: HandRank, played: &[Card]) -> impl FnOnce(&mut Game) {
+        let cards_played = played.len();
+        let oxes_money = self.active_boss() == Some(BossBlind::Ox) && self.is_most_played(rank);
+        let tooth = if self.active_boss() == Some(BossBlind::Tooth) {
+            cards_played
+        } else {
+            0
+        };
+        let wheel = self.active_boss() == Some(BossBlind::Wheel);
+        let hook = self.active_boss() == Some(BossBlind::Hook);
+        // Pillar's flag is a card ability set the moment a card is played
+        // and cleared at the ante's reset, whichever boss is up. Only read
+        // while Pillar itself is the active boss.
+        let pillar_ids: Vec<usize> = played.iter().map(|c| c.id).collect();
+        move |g: &mut Game| {
+            if oxes_money {
+                g.money = 0;
+            }
+            g.money = g.money.saturating_sub(tooth);
+            g.boss_state.played_this_ante.extend(pillar_ids);
+            if wheel {
+                g.boss_wheel_editions(cards_played);
+            }
+            if hook {
+                g.boss_hook_discard(HOOK_DISCARDS);
+            }
+        }
+    }
+
+    fn is_most_played(&self, rank: HandRank) -> bool {
+        self.most_played_hand_rank() == rank
+    }
+
+    /// The Wheel: each played card has a 1-in-4 chance of adding an
+    /// edition to a random Joker.
+    fn boss_wheel_editions(&mut self, cards_played: usize) {
+        for _ in 0..cards_played {
+            if self.jokers.is_empty() {
+                break;
+            }
+            if !self.prob_roll(EffectProc::WheelBoss, 1, 4) {
+                continue;
+            }
+            let target = self.backend.pick_random_joker(self.jokers.clone());
+            let edition = self.backend.roll_random_edition();
+            if let Some(j) = self
+                .jokers
+                .iter_mut()
+                .find(|j| j.instance_id() == target.instance_id())
+            {
+                j.set_edition(edition);
+            }
+        }
+    }
+
+    /// The Hook: discards a number of random unplayed cards straight to
+    /// the discard pile, after the hand's own redraw.
+    fn boss_hook_discard(&mut self, n: usize) {
+        let mut pool = self.available.not_selected().to_vec();
+        for _ in 0..n {
+            if pool.is_empty() {
+                break;
+            }
+            let idx = self.backend.random_index(pool.len());
+            let card = pool.remove(idx);
+            self.discarded.push(card);
+        }
     }
 
     // discard selected cards from available and draw equal number back to available
@@ -504,6 +1005,11 @@ impl Game {
     }
 
     pub(crate) fn destroy_card(&mut self, id: usize) {
+        if let Some(card) = self.find_card(id) {
+            if self.is_face_card(&card) {
+                self.face_cards_destroyed += 1;
+            }
+        }
         self.available.remove_by_id(id);
         self.deck.remove_by_id(id);
         self.discarded.retain(|c| c.id != id);
@@ -514,11 +1020,28 @@ impl Game {
         self.deck.mutate_card(id, f);
     }
 
+    pub(crate) fn joker_state(&self, id: usize) -> Option<JokerState> {
+        self.jokers
+            .iter()
+            .find(|j| j.instance_id() == id)
+            .map(|j| j.state())
+    }
+
     pub(crate) fn joker_state_mut(&mut self, id: usize) -> Option<&mut JokerState> {
         self.jokers
             .iter_mut()
             .find(|j| j.instance_id() == id)
             .map(|j| j.state_mut())
+    }
+
+    /// Every card in the run, wherever it currently sits.
+    pub(crate) fn find_card(&self, id: usize) -> Option<Card> {
+        self.deck
+            .cards()
+            .into_iter()
+            .chain(self.available.cards())
+            .chain(self.discarded.iter().copied())
+            .find(|c| c.id == id)
     }
 
     pub(crate) fn is_face_card(&self, card: &Card) -> bool {
@@ -539,14 +1062,64 @@ impl Game {
 
     /// Whether the active boss (if any) currently debuffs card
     pub fn is_card_debuffed(&self, card: &Card) -> bool {
+        // Verdant Leaf overrides every other debuff: nothing scores at all
+        // until a Joker is sold.
+        if self.boss_state.all_cards_debuffed {
+            return true;
+        }
         match self.active_boss() {
             Some(BossBlind::Club) => card.matches_suit(Suit::Club),
             Some(BossBlind::Goad) => card.matches_suit(Suit::Spade),
             Some(BossBlind::Head) => card.matches_suit(Suit::Heart),
             Some(BossBlind::Window) => card.matches_suit(Suit::Diamond),
             Some(BossBlind::Plant) => self.is_face_card(card),
+            // Pillar: a card stops scoring once it has been played this ante.
+            Some(BossBlind::Pillar) => self.boss_state.played_this_ante.contains(&card.id),
             _ => false,
         }
+    }
+
+    /// Test helper: mark the whole hand face down, to check the flag is
+    /// presentation-only.
+    #[cfg(test)]
+    pub(crate) fn force_everything_face_down(&mut self) {
+        for card in self.available.select_all_mut() {
+            card.face_down = true;
+        }
+    }
+
+    /// Whether a card dealt into the hand this blind stays face down.
+    ///
+    /// Mirrors the real game's `Blind:stay_flipped`, which is the single
+    /// place all four of these bosses are implemented. It is per card and
+    /// evaluated as the card is dealt, and the real game flips everything
+    /// back at the end of the blind.
+    pub(crate) fn stays_face_down(&mut self, card: &Card) -> bool {
+        match self.active_boss() {
+            // The real game reads `hands_played == 0 and discards_used == 0`
+            // for the round; those two round-scoped collections are the
+            // closest equivalent.
+            Some(BossBlind::House) => {
+                self.hand_ranks_played_this_round.is_empty() && self.discarded_this_round.is_empty()
+            }
+            Some(BossBlind::Mark) => self.is_face_card(card),
+            // The Fish: face down from the round's second hand onwards, so
+            // they accumulate in the deck face down.
+            Some(BossBlind::Fish) => self.hands_played_this_run > 0 || self.total_cards_discarded > 0,
+            // The Wheel flips a card face down as a side effect of its
+            // edition roll, so the same 1-in-7 is drawn twice: once for
+            // the edition, once for the flip.
+            Some(BossBlind::Wheel) => self.prob_roll(EffectProc::WheelBoss, 1, 7),
+            _ => false,
+        }
+    }
+
+    /// Whether a Joker is currently debuffed by The Crimson Heart.
+    pub fn is_joker_debuffed(&self, joker: &Jokers) -> bool {
+        self.boss_state
+            .debuffed_joker
+            .as_ref()
+            .is_some_and(|d| d.instance_id() == joker.instance_id())
     }
 
     // Filters debuffed cards out of a collection
@@ -576,9 +1149,9 @@ impl Game {
         all
     }
 
-    pub fn prob_roll(&mut self, numerator: u32, denominator: u32) -> bool {
+    pub(crate) fn prob_roll(&mut self, proc: EffectProc, numerator: u32, denominator: u32) -> bool {
         self.backend
-            .prob_roll(numerator.saturating_mul(self.prob_mult), denominator)
+            .prob_roll(proc, numerator.saturating_mul(self.prob_mult()), denominator)
     }
 
     pub fn calc_score(&mut self, hand: MadeHand) -> usize {
@@ -707,7 +1280,16 @@ impl Game {
             .map(|c| c.id);
 
         // per-scored-card, rank chips, enhancements, editions
-        for card in hand.hand.cards() {
+        let scoring: Vec<Card> = if self
+            .effect_registry
+            .rule_flags
+            .contains(&RuleFlag::AllPlayedCardsScore)
+        {
+            hand.all.clone()
+        } else {
+            hand.hand.cards()
+        };
+        for card in scoring {
             if self.is_card_debuffed(&card) {
                 self.boss_triggered_this_hand = true;
                 continue;
@@ -719,17 +1301,18 @@ impl Game {
 
                 // stone has no rank, skip normal chip value
                 if card.enhancement != Some(Enhancement::Stone) {
-                    self.chips += card.chips();
+                    self.chips += card.chips() + card.bonus_chips;
                 }
                 match card.enhancement {
                     Some(Enhancement::Bonus) => self.chips += 30,
                     Some(Enhancement::Mult) => self.mult += 4,
                     Some(Enhancement::Glass) => self.mult *= 2,
                     Some(Enhancement::Lucky) => {
-                        if self.prob_roll(1, 5) {
+                        if self.prob_roll(EffectProc::LuckyMult, 1, 5) {
                             self.mult += 20;
+                            self.lucky_triggers += 1;
                         }
-                        if self.prob_roll(1, 15) {
+                        if self.prob_roll(EffectProc::LuckyMoney, 1, 15) {
                             self.money += 20;
                         }
                     }
@@ -911,54 +1494,151 @@ impl Game {
         }
         let base = blind.reward();
         let hand_bonus = self.plays * self.config.money_per_hand;
-        let reward = base + interest + hand_bonus;
+        // To the Moon's interest is additional to, and uncapped by, the
+        // normal interest table.
+        let to_the_moon = self.joker_interest_bonus();
+        let reward = base + interest + hand_bonus + to_the_moon;
         Ok(reward)
     }
 
+    /// Collects one tag. Anything that fires later instead of now is
+    /// parked in `TagState` and consumed by the shop / blind / round hooks.
     fn apply_tag(&mut self, tag: Tag) {
-        match tag {
-            Tag::Uncommon => {}
-            Tag::Rare => {}
-            Tag::Negative => {}
-            Tag::Foil => {}
-            Tag::Holographic => {}
-            Tag::Polychrome => {}
-            Tag::Investment => {}
-            Tag::Voucher => {}
-            Tag::Boss => {}
-            Tag::Standard => {}
-            Tag::Charm => {}
-            Tag::Meteor => {}
-            Tag::Buffoon => {}
-            Tag::Handy => {}
-            Tag::Garbage => {}
-            Tag::Ethereal => {}
-            Tag::Coupon => {}
-            Tag::Double => {}
-            Tag::Juggle => {}
-            Tag::D6 => {}
-            Tag::TopUp => {}
-            Tag::Speed => {}
-            Tag::Orbital => {}
-            Tag::Economy => {}
+        // Double duplicates whatever is collected next, including itself
+        // being collected twice.
+        let double = std::mem::take(&mut self.tag_state.double);
+        self.collect_tag(tag);
+        if double {
+            self.collect_tag(tag);
         }
     }
 
-    fn cashout(&mut self) -> Result<(), GameError> {
-        for tag in std::mem::take(&mut self.tags) {
-            self.apply_tag(tag);
+    fn collect_tag(&mut self, tag: Tag) {
+        match tag {
+            // "The next shop will have a free Uncommon/Rare Joker."
+            Tag::Uncommon => self.tag_state.pending_free_joker = Some(Rarity::Uncommon),
+            Tag::Rare => self.tag_state.pending_free_joker = Some(Rarity::Rare),
+            // The next base edition Joker in a shop becomes this edition and
+            // is free. Only one pending at a time — a second one overwrites.
+            Tag::Negative => self.tag_state.pending_edition = Some(Edition::Negative),
+            Tag::Foil => self.tag_state.pending_edition = Some(Edition::Foil),
+            Tag::Holographic => self.tag_state.pending_edition = Some(Edition::Holographic),
+            Tag::Polychrome => self.tag_state.pending_edition = Some(Edition::Polychrome),
+            // Pays out on the next boss blind, not now.
+            Tag::Investment => self.tag_state.investment = true,
+            // A second voucher slot in the next shop.
+            Tag::Voucher => self.tag_state.voucher_slot = true,
+            // Re-rolls the next boss blind, applied in `start_ante`.
+            Tag::Boss => self.tag_state.boss_reroll = true,
+            // Pack tags open their pack immediately, so they bypass the
+            // shop and go straight to the pack stage. Size and category come
+            // from the real game: Spectral is the one that isn't a Mega.
+            Tag::Standard => self.open_free_pack(PackCategory::Standard, PackSize::Mega),
+            Tag::Charm => self.open_free_pack(PackCategory::Arcana, PackSize::Mega),
+            Tag::Meteor => self.open_free_pack(PackCategory::Celestial, PackSize::Mega),
+            Tag::Buffoon => self.open_free_pack(PackCategory::Buffoon, PackSize::Mega),
+            Tag::Ethereal => self.open_free_pack(PackCategory::Spectral, PackSize::Normal),
+            // $1 per hand played this run.
+            Tag::Handy => self.money += self.hands_played_this_run,
+            // $1 per unused discard this run.
+            Tag::Garbage => self.money += self.unused_discards_this_run,
+            // $5 per blind skipped this run.
+            Tag::Speed => self.money += 5 * self.blinds_skipped_this_run,
+            // Doubles money, but only ever adds up to $40.
+            Tag::Economy => self.money += self.money.min(40),
+            // Every Joker, consumable and pack in the next shop is free.
+            Tag::Coupon => self.tag_state.coupon = true,
+            // Duplicates the next tag collected.
+            Tag::Double => self.tag_state.double = true,
+            // +3 hand size for the next round only.
+            Tag::Juggle => self.tag_state.hand_size_bonus += 3,
+            // The next shop's rerolls start at $0.
+            Tag::D6 => self.tag_state.free_rerolls = true,
+            // Up to 2 Common Jokers, if there's room.
+            Tag::TopUp => self.spawn_top_up_jokers(),
+            // Levels a hand chosen when the tag was drawn, so the player
+            // could see which before skipping.
+            Tag::Orbital => {
+                let rank = self.tag_state.orbital_hand.take();
+                if let Some(rank) = rank {
+                    for _ in 0..ORBITAL_TAG_LEVELS {
+                        self.planetarium.level_up(rank);
+                    }
+                }
+            }
         }
+    }
+
+    /// Top-up: as many Common Jokers as fit, for free.
+    fn spawn_top_up_jokers(&mut self) {
+        for _ in 0..TOP_UP_TAG_JOKERS {
+            if self.jokers.len() >= self.joker_slots() {
+                break;
+            }
+            let prob_mult = self.prob_mult();
+            let mut exclude = Vec::new();
+            for j in &self.jokers {
+                if j.rarity() == Rarity::Common {
+                    exclude.push(j.clone());
+                }
+            }
+            let joker = self
+                .backend
+                .gen_joker_of_rarity(self.ante_current as i32, prob_mult, &exclude, Rarity::Common);
+            self.jokers.push(joker);
+        }
+    }
+
+    /// A pack the player didn't pay for, opened straight away. Arcana and
+    /// Spectral packs draw a hand to target their cards against, same as a
+    /// bought one.
+    fn open_free_pack(&mut self, category: PackCategory, size: PackSize) {
+        let planetarium = self.planetarium.clone();
+        let consumables = self.consumables.clone();
+        let jokers = self.jokers.clone();
+        let vouchers = self.vouchers.clone();
+        let ctx = self.shop_context(&planetarium, &consumables, &jokers, &vouchers);
+        let pack = self.backend.gen_pack_of(&ctx, category, size);
+        if matches!(pack.category, PackCategory::Arcana | PackCategory::Spectral) {
+            self.draw(self.hand_size());
+        }
+        self.open_pack = Some(OpenPackState {
+            picks_remaining: pack.picks_allowed(),
+            description: pack.description(),
+            contents: pack.contents,
+        });
+        self.stage = Stage::PackOpen();
+        self.joker_pack_opened();
+    }
+
+    fn cashout(&mut self) -> Result<(), GameError> {
         self.money += self.reward;
         self.reward = 0;
         self.reroll_cost = self.base_reroll_cost();
+        self.rerolls_this_shop = 0;
         self.stage = Stage::Shop();
+
+        // Tags fire between entering the shop and stocking it, because most
+        // of them shape the shop: Coupon and D6 set flags, the Uncommon /
+        // Rare / edition tags are consumed by the refresh below, and the
+        // pack tags overwrite `stage` after everything else has run.
+        self.tags.append(&mut self.pending_tags);
+        for tag in std::mem::take(&mut self.tags) {
+            self.apply_tag(tag);
+        }
+        if std::mem::take(&mut self.tag_state.free_rerolls) {
+            self.reroll_cost = 0;
+        }
         self.refresh_voucher_offer();
+
         let planetarium = self.planetarium.clone();
         let held_consumables = self.consumables.clone();
         let held_jokers = self.jokers.clone();
         let vouchers = self.vouchers.clone();
         let ctx = self.shop_context(&planetarium, &held_consumables, &held_jokers, &vouchers);
-        self.shop.refresh(&ctx, &mut self.backend);
+        let mut tags = std::mem::take(&mut self.tag_state);
+        self.shop.refresh(&ctx, &mut self.backend, &mut tags);
+        self.tag_state = tags;
         Ok(())
     }
 
@@ -976,6 +1656,20 @@ impl Game {
         self.shop.voucher = self
             .backend
             .gen_voucher(self.ante_current as i32, &vouchers);
+        self.refresh_voucher_tag_offer();
+    }
+
+    /// The Voucher Tag adds a second voucher to the next shop. Drawn
+    /// separately from the ante's own offer so the two can't collide, and
+    /// dropped as soon as it's been seen.
+    fn refresh_voucher_tag_offer(&mut self) {
+        if !std::mem::take(&mut self.tag_state.voucher_slot) {
+            return;
+        }
+        let vouchers = self.vouchers.clone();
+        self.shop.voucher_tag_offer = self
+            .backend
+            .gen_voucher(self.ante_current as i32, &vouchers);
     }
 
     pub(crate) fn reroll(&mut self) -> Result<(), GameError> {
@@ -985,8 +1679,15 @@ impl Game {
         if self.money < self.reroll_cost {
             return Err(GameError::InvalidBalance);
         }
-        self.money -= self.reroll_cost;
-        self.reroll_cost += 1;
+        // Chaos the Clown's rerolls cost nothing and don't escalate.
+        let free = self.free_rerolls_this_round > 0;
+        if free {
+            self.free_rerolls_this_round -= 1;
+        } else {
+            self.money -= self.reroll_cost;
+            self.reroll_cost += 1;
+        }
+        self.rerolls_this_shop += 1;
         let planetarium = self.planetarium.clone();
         let mut held = self.consumables.clone();
         held.extend(self.shop.consumables.clone());
@@ -996,7 +1697,9 @@ impl Game {
         // Note: `refresh_cards`, not `refresh` — rerolls leave the packs
         // and the voucher offer untouched.
         let ctx = self.shop_context(&planetarium, &held, &held_jokers, &vouchers);
-        self.shop.refresh_cards(&ctx, &mut self.backend);
+        let mut tags = std::mem::take(&mut self.tag_state);
+        self.shop.refresh_cards(&ctx, &mut self.backend, &mut tags);
+        self.tag_state = tags;
         Ok(())
     }
 
@@ -1016,6 +1719,17 @@ impl Game {
         }
         if sold.edition() == Edition::Negative {
             self.config.joker_slots = self.config.joker_slots.saturating_sub(1);
+        }
+        if matches!(sold, Jokers::InvisibleJoker(_)) && self.rounds_played >= INVISIBLE_JOKER_ROUNDS
+        {
+            self.duplicate_random_joker();
+        }
+
+        // Selling any Joker ends Verdant Leaf, via the same mechanism as
+        // Luchador.
+        if self.current_boss == Some(BossBlind::VerdantLeaf) {
+            self.boss_disabled = true;
+            self.boss_state.all_cards_debuffed = false;
         }
         // Only unlock if this was the last owned copy (Showman is the only
         // way to own more than one) — a discriminant compare, matching
@@ -1056,11 +1770,24 @@ impl Game {
         if self.jokers.len() >= self.joker_slots() {
             return Err(GameError::NoAvailableSlot);
         }
-        if self.price(joker.cost()) > self.money {
+        // A tag's free Joker, or a couponed shop, costs nothing. Resolved
+        // by slot because two copies of a Joker are otherwise identical.
+        let slot = self
+            .shop
+            .jokers
+            .iter()
+            .position(|j| j.instance_id() == joker.instance_id());
+        let free = self.shop.couponed
+            || slot.is_some_and(|i| self.shop.free_joker_slots.contains(&i));
+        let cost = if free { 0 } else { self.price(joker.cost()) };
+        if cost > self.money {
             return Err(GameError::InvalidBalance);
         }
         self.shop.buy_joker(&joker)?;
-        self.money -= self.price(joker.cost());
+        if let Some(i) = slot {
+            self.shop.free_joker_slots.remove(&i);
+        }
+        self.money -= cost;
         self.backend.on_joker_bought(&joker);
         self.jokers.push(joker);
         self.effect_registry
@@ -1075,11 +1802,12 @@ impl Game {
         if self.consumables.len() >= self.consumable_slots() {
             return Err(GameError::NoAvailableSlot);
         }
-        if self.price(consumable.cost()) > self.money {
+        let cost = self.shop.price(|c| self.price(c), consumable.cost());
+        if cost > self.money {
             return Err(GameError::InvalidBalance);
         }
         self.shop.buy_consumable(&consumable)?;
-        self.money -= self.price(consumable.cost());
+        self.money -= cost;
         self.consumables.push(consumable);
         Ok(())
     }
@@ -1130,7 +1858,9 @@ impl Game {
             held_jokers.extend(self.shop.jokers.clone());
             let vouchers = self.vouchers.clone();
             let ctx = self.shop_context(&planetarium, &held, &held_jokers, &vouchers);
-            self.shop.top_up_cards(&ctx, &mut self.backend);
+            let mut tags = std::mem::take(&mut self.tag_state);
+            self.shop.top_up_cards(&ctx, &mut self.backend, &mut tags);
+            self.tag_state = tags;
         }
     }
 
@@ -1193,12 +1923,14 @@ impl Game {
         self.consumables.remove(i);
         match consumable {
             Consumable::Planet(planet) => {
+                self.planets_used_this_run += 1;
                 self.planetarium.level_up(planet.hand_rank());
                 self.last_consumable_used = Some(Consumable::Planet(planet));
             }
             Consumable::Tarot(t) => {
                 t.apply(self)?;
                 if t != Tarot::Fool {
+                    self.tarots_used_this_run += 1;
                     self.last_consumable_used = Some(Consumable::Tarot(t));
                 }
             }
@@ -1280,11 +2012,12 @@ impl Game {
         if self.stage != Stage::Shop() {
             return Err(GameError::InvalidStage);
         }
-        if self.price(pack.cost()) > self.money {
+        let cost = self.shop.price(|c| self.price(c), pack.cost());
+        if cost > self.money {
             return Err(GameError::InvalidBalance);
         }
         self.shop.buy_pack(&pack)?;
-        self.money -= self.price(pack.cost());
+        self.money -= cost;
 
         // Arcana/Spectral packs draw a hand for the player to apply targeted
         // tarots/spectrals against
@@ -1298,6 +2031,7 @@ impl Game {
             contents: pack.contents,
         });
         self.stage = Stage::PackOpen();
+        self.joker_pack_opened();
         Ok(())
     }
 
@@ -1339,6 +2073,7 @@ impl Game {
                 t.apply(self)?;
             }
             PackContent::Planet(p) => {
+                self.planets_used_this_run += 1;
                 self.planetarium.level_up(p.hand_rank());
             }
             PackContent::Joker(j) => {
@@ -1412,6 +2147,14 @@ impl Game {
                 return Err(GameError::InvalidBlind);
             }
         }
+        self.begin_round(blind);
+        Ok(())
+    }
+
+    /// Everything that happens as a round opens: per-round resources, the
+    /// boss's own setup, then the deal. Split out of `select_blind` so the
+    /// boss logic is testable without walking the action path.
+    pub(crate) fn begin_round(&mut self, blind: Blind) {
         self.blind = Some(blind);
         self.stage = Stage::Blind(blind);
         // Per-round resources are set here, at the start of the round, not
@@ -1420,8 +2163,218 @@ impl Game {
         // has to count for the round it was bought for.
         self.plays = self.plays_per_round();
         self.discards_remaining = self.discards_per_round();
+        self.hand_ranks_played_this_round.clear();
+        self.discarded_this_round.clear();
+        self.boss_state.on_new_blind();
+        self.boss_state.all_cards_debuffed = self.active_boss() == Some(BossBlind::VerdantLeaf);
+        self.boss_crimson_heart();
+        // Showman is the backend's lock-table switch, refreshed here so
+        // buying or selling one takes effect at once.
+        let showman = self.jokers.iter().any(|j| matches!(j, Jokers::Showman(_)));
+        self.backend.set_showman(showman);
+        self.joker_round_decay();
+        self.joker_blind_start(blind);
+        if self.active_boss() == Some(BossBlind::AmberAcorn) {
+            // The real game shuffles the joker area with the node 'aajk'.
+            // Its pre-shuffle order is each joker's declaration order, so
+            // the permutation is valid but not byte-identical.
+            self.backend.shuffle_jokers(&mut self.jokers);
+        }
         self.deal();
-        Ok(())
+    }
+
+    /// Turtle Bean loses a card of hand size each round and Troubadour a
+    /// hand, both only from the round after they're bought.
+    fn joker_round_decay(&mut self) {
+        for joker in self.jokers.iter_mut() {
+            match joker {
+                Jokers::TurtleBean(b) => b.state.counter -= 1.0,
+                Jokers::Troubadour(t) => t.state.counter += 1.0,
+                _ => {}
+            }
+        }
+    }
+
+    /// DNA and Sixth Sense both look at the round's first hand, and both
+    /// consume the card, so they run once per round.
+    fn joker_first_hand(&mut self, played: &[Card]) {
+        if self.hands_played_this_round != 1 || played.len() != 1 {
+            return;
+        }
+        let card = played[0];
+
+        if self
+            .jokers
+            .iter()
+            .any(|j| matches!(j, Jokers::Dna(_)))
+        {
+            let copy = self.copy_of_card(&card);
+            self.add_card_to_deck(copy);
+            self.cards_added_this_ante += 1;
+            self.available.select_card(card).ok();
+        }
+
+        if card.value == Value::Six
+            && self
+                .jokers
+                .iter()
+                .any(|j| matches!(j, Jokers::SixthSense(_)))
+        {
+            self.destroy_card(card.id);
+            self.available.deselect_card(card).ok();
+            self.add_spectral();
+        }
+    }
+
+    /// Hallucination: a coin flip for a tarot on any pack opened.
+    pub(crate) fn joker_pack_opened(&mut self) {
+        if !self
+            .jokers
+            .iter()
+            .any(|j| matches!(j, Jokers::Hallucination(_)))
+        {
+            return;
+        }
+        if self.prob_roll(EffectProc::Hallucination, 1, 2) {
+            self.add_tarot();
+        }
+    }
+
+    /// Jokers that act when a blind is selected, rather than on a score.
+    /// Runs before the deal, so anything that changes hand size or card
+    /// count applies to the hand actually dealt.
+    fn joker_blind_start(&mut self, blind: Blind) {
+        let played = blind != Blind::Boss;
+        // Cards already in the hand can't be counted by a blind-start
+        // joker, so they read the deck and discard piles instead.
+        let deck_cards = self.deck.cards();
+
+        // Riff Raff: two Common Jokers, one pair per copy.
+        let riff_raffs = self
+            .jokers
+            .iter()
+            .filter(|j| matches!(j, Jokers::RiffRaff(_)))
+            .count();
+        for _ in 0..RIFF_RAFF_JOKERS * riff_raffs {
+            if self.jokers.len() >= self.joker_slots() {
+                break;
+            }
+            let exclude: Vec<Jokers> = self
+                .jokers
+                .iter()
+                .filter(|j| j.rarity() == Rarity::Common)
+                .cloned()
+                .collect();
+            let joker = self.backend.gen_joker_of_rarity(
+                self.ante_current as i32,
+                self.prob_mult(),
+                &exclude,
+                Rarity::Common,
+            );
+            self.jokers.push(joker);
+        }
+
+        // Chaos the Clown: one free reroll for the round.
+        self.free_rerolls_this_round = self
+            .jokers
+            .iter()
+            .filter(|j| matches!(j, Jokers::ChaosTheClown(_)))
+            .count();
+
+        // Cartomancer: a tarot each blind.
+        if self.jokers.iter().any(|j| matches!(j, Jokers::Cartomancer(_))) {
+            self.add_tarot();
+        }
+
+        // Burglar: +3 hands, all discards gone.
+        if self.jokers.iter().any(|j| matches!(j, Jokers::Burglar(_))) {
+            self.plays += 3;
+            self.discards_remaining = 0;
+        }
+
+        // Marble Joker: a Stone card into the deck.
+        let marbles = self
+            .jokers
+            .iter()
+            .filter(|j| matches!(j, Jokers::MarbleJoker(_)))
+            .count();
+        for _ in 0..marbles {
+            let card = self.backend.gen_random_card(self.prob_mult(), false, None);
+            self.add_card_to_deck(card);
+            self.cards_added_this_ante += 1;
+        }
+
+        // Certificate: a random playing card with a random seal.
+        if self
+            .jokers
+            .iter()
+            .any(|j| matches!(j, Jokers::Certificate(_)))
+        {
+            let card = self.backend.gen_random_card(self.prob_mult(), false, None);
+            let seal = self.backend.roll_random_seal(self.ante_current as i32);
+            let mut card = card;
+            card.seal = Some(seal);
+            self.add_card_to_deck(card);
+            self.cards_added_this_ante += 1;
+        }
+
+        // Burnt Joker: level up whatever the first discard of the round is,
+        // so arm it now and let the discard hook do the work.
+        if self
+            .jokers
+            .iter()
+            .any(|j| matches!(j, Jokers::BurntJoker(_)))
+        {
+            self.burnt_joker_armed = true;
+        }
+
+        // Ceremonial Dagger: destroy the Joker to the right and bank double
+        // its sell value as permanent Mult.
+        let daggers: Vec<usize> = self
+            .jokers
+            .iter()
+            .filter(|j| matches!(j, Jokers::CeremonialDagger(_)))
+            .map(|j| j.instance_id())
+            .collect();
+        for id in daggers {
+            let Some(victim) = self.joker_to_the_right(id) else {
+                continue;
+            };
+            let value = victim.sell_value() * CEREMONIAL_DAGGER_VALUE_MULT;
+            self.destroy_joker(victim.instance_id());
+            if let Some(state) = self.joker_state_mut(id) {
+                state.counter += value as f32;
+            }
+        }
+
+        // Madness: X0.5 Mult and a random Joker destroyed, on small and big
+        // blinds only.
+        if played {
+            self.madness_blind_start(&deck_cards);
+        }
+        self.effect_registry
+            .register_jokers(self.jokers.clone(), &self.clone());
+    }
+
+    /// Madness: on a small or big blind, gain X0.5 Mult and destroy a
+    /// random other Joker. Its Mult is a per-instance counter.
+    fn madness_blind_start(&mut self, _deck_cards: &[Card]) {
+        let victims: Vec<usize> = self
+            .jokers
+            .iter()
+            .filter(|j| !matches!(j, Jokers::Madness(_)))
+            .map(|j| j.instance_id())
+            .collect();
+        if victims.is_empty() {
+            return;
+        }
+        for joker in self.jokers.iter_mut() {
+            if let Jokers::Madness(m) = joker {
+                m.state.counter += MADNESS_MULT_STEP;
+            }
+        }
+        let idx = self.backend.random_index(victims.len());
+        self.destroy_joker(victims[idx]);
     }
 
     fn skip_blind(&mut self, blind: Blind) -> Result<(), GameError> {
@@ -1444,17 +2397,27 @@ impl Game {
             .skip_tag(blind)
             .expect("blind is not Boss, checked above");
         self.tags.push(tag);
+        self.blinds_skipped_this_run += 1;
         Ok(())
     }
 
-    fn draw_ante_tags(&mut self) {
-        let (small, big) = self.backend.draw_ante_tags();
+    /// Everything an ante needs drawn before its first blind: the lock-table
+    /// update, the two skippable tags, and the boss.
+    fn start_ante(&mut self) {
+        self.backend.on_ante_start(self.ante_current as i32);
+        let (small, big) = self.backend.draw_ante_tags(self.ante_current as i32);
         self.small_blind_tag = small;
         self.big_blind_tag = big;
-    }
-
-    fn draw_ante_boss(&mut self) {
-        self.current_boss = Some(self.backend.draw_boss(self.ante_current as i32));
+        // Orbital's hand is chosen now, while the tag is still visible and
+        // skippable, and the effect lands when it's collected.
+        if big == Tag::Orbital || small == Tag::Orbital {
+            self.tag_state.orbital_hand = Some(self.backend.roll_random_hand());
+        }
+        let mut boss = self.backend.draw_boss(self.ante_current as i32);
+        if std::mem::take(&mut self.tag_state.boss_reroll) {
+            boss = self.backend.draw_boss(self.ante_current as i32);
+        }
+        self.current_boss = Some(boss);
     }
 
     pub fn skip_tag(&self, blind: Blind) -> Option<Tag> {
@@ -1468,10 +2431,31 @@ impl Game {
     fn next_round(&mut self) -> Result<(), GameError> {
         self.stage = Stage::PreBlind();
         self.round += 1;
+        // Juggle's hand size covers exactly one round.
+        self.tag_state.hand_size_bonus = 0;
         Ok(())
     }
 
     // Returns true if should clear blind after, false if not.
+    /// Mr. Bones: once per run, if this hand was worth at least a quarter
+    /// of what the blind needed, it saves the run and self-destructs.
+    fn mr_bones_saves(&mut self) -> bool {
+        let Some(id) = self
+            .jokers
+            .iter()
+            .find(|j| matches!(j, Jokers::MrBones(_)))
+            .map(|j| j.instance_id())
+        else {
+            return false;
+        };
+        let threshold = self.required_score() / MR_BONES_DIVISOR;
+        if self.score < threshold.max(1) {
+            return false;
+        }
+        self.destroy_joker(id);
+        true
+    }
+
     fn handle_score(&mut self, score: usize) -> Result<bool, GameError> {
         // can only handle score if stage is blind
         if !self.stage.is_blind() {
@@ -1485,6 +2469,9 @@ impl Game {
         if self.score < required {
             // no more hands to play -> lose
             if self.plays == 0 {
+                if self.mr_bones_saves() {
+                    return Ok(false);
+                }
                 self.stage = Stage::End(End::Lose);
                 return Ok(false);
             } else {
@@ -1495,6 +2482,7 @@ impl Game {
 
         let blind = self.blind.expect("stage is blind");
         self.last_score = self.score;
+        self.unused_discards_this_run += self.discards_remaining;
 
         // score exceeds blind (blind passed).
         // handle reward then progress to next stage.
@@ -1503,11 +2491,17 @@ impl Game {
 
         // passed boss blind, either win or progress ante
         if blind == Blind::Boss {
+            self.campfire_sold = 0;
+            // Investment Tag pays here, not when the tag was collected.
+            if std::mem::take(&mut self.tag_state.investment) {
+                self.money += INVESTMENT_TAG_DOLLARS;
+            }
             if let Some(ante_next) = self.ante_current.next(self.ante_end) {
                 self.ante_current = ante_next;
                 self.blind = None;
-                self.draw_ante_tags();
-                self.draw_ante_boss();
+                self.boss_state.on_new_ante();
+                self.cards_added_this_ante = 0;
+                self.start_ante();
             } else {
                 self.stage = Stage::End(End::Win);
                 return Ok(false);
@@ -1543,7 +2537,7 @@ impl Game {
                 if self.stage.is_blind()
                     || matches!(self.stage, Stage::TarotHand(_) | Stage::SpectralHand(_))
                 {
-                    self.available.deselect_card(card)
+                    self.deselect_card(card)
                 } else {
                     Err(GameError::InvalidAction)
                 }
@@ -1756,7 +2750,7 @@ impl Game {
             .filter(|&id| id > 0)
             .max();
         if game.current_boss.is_none() {
-            game.draw_ante_boss();
+            game.current_boss = Some(game.backend.draw_boss(game.ante_current as i32));
         }
 
         if let Some(max_joker_id) = max_joker_id {
@@ -1786,7 +2780,7 @@ mod tests {
         let planetarium = g.planetarium.clone();
         let vouchers = Vouchers::new();
         let ctx = ShopContext::for_test(&planetarium, &vouchers, 1);
-        g.shop.refresh(&ctx, &mut g.backend);
+        g.shop.refresh(&ctx, &mut g.backend, &mut TagState::default());
 
         assert_eq!(g.shop.jokers.len(), 1);
         assert_eq!(g.shop.jokers[0].name(), "Ice Cream");
@@ -1806,10 +2800,10 @@ mod tests {
         assert_eq!(p2_contents, vec!["Medium", "Wraith"]);
     }
 
-    // `cargo run -p balatro-seed --bin explore -- TEST --ante 1` reports
-    // `Boss: The Goad` for this seed, but `RealBackend::draw_boss` doesn't
-    // match it (yet).
-    // TODO: Fix min ante for real rng boss gen
+    // `cargo run -p balatro-seed --bin explore -- TEST` reports
+    // `Boss: The Goad` for ante 1 of this seed. `core`'s real mode has to
+    // agree, which is only true if `on_run_start` seeds the lock table
+    // before the draw — Goad is ante-1-legal while most bosses are not.
     #[test]
     fn test_real_rng_mode_draw_boss_reaches_instance() {
         let config = Config {
@@ -1818,7 +2812,39 @@ mod tests {
             ..Config::default()
         };
         let g = Game::new(config);
-        assert_eq!(g.current_boss, Some(BossBlind::Flint));
+        assert_eq!(g.current_boss, Some(BossBlind::Goad));
+    }
+
+    // Same, one ante at a time, against `explore`'s per-ante boss list.
+    // Guards the `init_unlocks` handoff: without it, `next_boss`'s category
+    // filter would happily hand out an ante-6 boss on ante 1.
+    #[test]
+    fn test_real_rng_mode_draw_boss_matches_explore_per_ante() {
+        fn run() -> Vec<BossBlind> {
+            let fast = crate::rng::FastBackend::new(rand_chacha::ChaCha8Rng::seed_from_u64(1));
+            let mut backend = crate::rng::RealBackend::new("TEST", fast);
+            backend.on_run_start();
+            (1..=8)
+                .map(|ante| {
+                    backend.on_ante_start(ante);
+                    backend.draw_boss(ante)
+                })
+                .collect()
+        }
+
+        assert_eq!(
+            run(),
+            vec![
+                BossBlind::Goad,
+                BossBlind::House,
+                BossBlind::Wall,
+                BossBlind::Wheel,
+                BossBlind::Psychic,
+                BossBlind::Arm,
+                BossBlind::Hook,
+                BossBlind::CrimsonHeart,
+            ],
+        );
     }
 
     // Same seed through two independent `Game`s: proves `RngMode::Real`
@@ -1839,7 +2865,7 @@ mod tests {
             for ante in 1..=4 {
                 let vouchers = Vouchers::new();
                 let ctx = ShopContext::for_test(&planetarium, &vouchers, ante);
-                g.shop.refresh(&ctx, &mut g.backend);
+                g.shop.refresh(&ctx, &mut g.backend, &mut TagState::default());
                 let jokers: Vec<String> =
                     g.shop.jokers.iter().map(|j| j.name().to_string()).collect();
                 let consumables: Vec<String> = g
@@ -1880,7 +2906,7 @@ mod tests {
         let planetarium = g.planetarium.clone();
         let vouchers = Vouchers::new();
         let ctx = ShopContext::for_test(&planetarium, &vouchers, 1);
-        g.shop.refresh(&ctx, &mut g.backend);
+        g.shop.refresh(&ctx, &mut g.backend, &mut TagState::default());
         let bought = g.shop.jokers[0].clone();
         g.buy_joker(bought.clone()).expect("buy joker");
 
@@ -1891,7 +2917,7 @@ mod tests {
                 held_jokers: &held_jokers,
                 ..ShopContext::for_test(&planetarium, &vouchers, ante)
             };
-            g.shop.refresh(&ctx, &mut g.backend);
+            g.shop.refresh(&ctx, &mut g.backend, &mut TagState::default());
             assert!(
                 g.shop
                     .jokers
@@ -1919,7 +2945,7 @@ mod tests {
         let planetarium = g.planetarium.clone();
         let vouchers = Vouchers::new();
         let ctx = ShopContext::for_test(&planetarium, &vouchers, 1);
-        g.shop.refresh(&ctx, &mut g.backend);
+        g.shop.refresh(&ctx, &mut g.backend, &mut TagState::default());
         let bought = g.shop.jokers[0].clone();
         g.buy_joker(bought.clone()).expect("buy joker");
         g.sell_joker(0).expect("sell joker");
@@ -1927,7 +2953,7 @@ mod tests {
         let mut reappeared = false;
         for ante in 1..=500 {
             let ctx = ShopContext::for_test(&planetarium, &vouchers, ante);
-            g.shop.refresh(&ctx, &mut g.backend);
+            g.shop.refresh(&ctx, &mut g.backend, &mut TagState::default());
             if g.shop
                 .jokers
                 .iter()
@@ -2235,20 +3261,20 @@ mod tests {
         let g = Game {
             current_boss: Some(BossBlind::Club),
             blind: Some(Blind::Boss),
-            boss_disabled_by_luchador: true,
+            boss_disabled: true,
             ..Default::default()
         };
         assert_eq!(g.active_boss(), None);
     }
 
     #[test]
-    fn test_boss_disabled_by_luchador_resets_on_clear_blind() {
+    fn test_boss_disabled_resets_on_clear_blind() {
         let mut g = Game {
-            boss_disabled_by_luchador: true,
+            boss_disabled: true,
             ..Default::default()
         };
         g.clear_blind();
-        assert!(!g.boss_disabled_by_luchador);
+        assert!(!g.boss_disabled);
     }
 
     #[test]
@@ -2583,7 +3609,7 @@ mod tests {
         let g = Game {
             current_boss: Some(BossBlind::Wall),
             blind: Some(Blind::Boss),
-            boss_disabled_by_luchador: true,
+            boss_disabled: true,
             ..Default::default()
         };
         assert_eq!(g.required_score(), 300 * 2);
@@ -2775,7 +3801,7 @@ mod tests {
             current_boss: Some(BossBlind::Water),
             blind: Some(Blind::Boss),
             discards_remaining: 4,
-            boss_disabled_by_luchador: true,
+            boss_disabled: true,
             ..Default::default()
         };
         assert_eq!(g.discards(), 4);
@@ -3582,7 +4608,7 @@ mod tests {
         let hand_size_before = g.available.cards().len();
 
         // Force 100% shatter probability (only needs to be 4 but overkill is ok)
-        g.prob_mult = 100;
+        g.prob_mult_base = 100;
 
         // Select glass + 4 others (5-card hand)
         let to_select: Vec<Card> = g.available.cards().into_iter().take(5).collect();
@@ -3699,10 +4725,10 @@ mod tests {
 
         // Selling an unrelated joker must not trigger Luchador's OnSell effect.
         g.sell_joker(0).expect("sell plain joker");
-        assert!(!g.boss_disabled_by_luchador);
+        assert!(!g.boss_disabled);
 
         g.sell_joker(0).expect("sell luchador");
-        assert!(g.boss_disabled_by_luchador);
+        assert!(g.boss_disabled);
     }
 
     #[test]
@@ -4207,6 +5233,286 @@ mod tests {
             .expect("buy voucher");
     }
 
+    // --- tags ---
+    //
+    // Tags fire at `cashout`, which is when the real game pops them, so
+    // the helpers below collect one through the real path rather than
+    // poking `tag_state` directly. Counters a tag pays against have to be
+    // set before the cashout, hence `set_before_cashout`.
+
+    /// A fixed seed, so the joker tags have a Joker to land on. A shop
+    /// whose two card slots both rolled consumables would silently skip
+    /// them, and `Game::default()` is seeded from entropy.
+    const TAG_TEST_SEED: u64 = 20_240_517;
+
+    fn game_at_post_blind() -> Game {
+        let mut g = Game::new(Config {
+            seed: Some(TAG_TEST_SEED),
+            ..Config::default()
+        });
+        g.start();
+        g.stage = Stage::PostBlind();
+        g
+    }
+
+    /// A game in the Shop with `tag` collected on the way in.
+    fn game_in_shop_with_tag(tag: Tag) -> Game {
+        let mut g = game_at_post_blind();
+        g.tags.push(tag);
+        g.handle_action(Action::CashOut(0)).expect("cash out");
+        g
+    }
+
+    /// A game in the Shop with `tag` collected, having first run `setup`
+    /// to establish the run counters the tag pays against.
+    fn game_in_shop_with_tag_after(tag: Tag, setup: impl FnOnce(&mut Game)) -> Game {
+        let mut g = game_at_post_blind();
+        setup(&mut g);
+        g.tags.push(tag);
+        g.handle_action(Action::CashOut(0)).expect("cash out");
+        g
+    }
+
+    #[test]
+    fn test_handy_tag_pays_per_hand_played_this_run() {
+        let g = game_in_shop_with_tag_after(Tag::Handy, |g| g.hands_played_this_run = 7);
+        assert_eq!(g.money, 7);
+    }
+
+    #[test]
+    fn test_garbage_tag_pays_per_unused_discard_this_run() {
+        let g = game_in_shop_with_tag_after(Tag::Garbage, |g| g.unused_discards_this_run = 4);
+        assert_eq!(g.money, 4);
+    }
+
+    #[test]
+    fn test_speed_tag_pays_five_per_blind_skipped_this_run() {
+        let g = game_in_shop_with_tag_after(Tag::Speed, |g| g.blinds_skipped_this_run = 3);
+        assert_eq!(g.money, 15);
+    }
+
+    #[test]
+    fn test_economy_tag_doubles_money_but_only_adds_forty() {
+        let small = game_in_shop_with_tag_after(Tag::Economy, |g| g.money = 10);
+        assert_eq!(small.money, 20, "10 doubles to 20");
+
+        let big = game_in_shop_with_tag_after(Tag::Economy, |g| g.money = 100);
+        assert_eq!(big.money, 140, "100 doubles, but only 40 is added");
+    }
+
+    #[test]
+    fn test_investment_tag_waits_for_the_next_boss_blind() {
+        let g = game_in_shop_with_tag(Tag::Investment);
+        assert!(g.tag_state.investment, "collected, not yet paid");
+        assert_eq!(g.money, 0, "Investment pays on the boss, not on pickup");
+    }
+
+    #[test]
+    fn test_coupon_tag_frees_the_next_shop_and_is_dropped_on_reroll() {
+        let mut g = game_in_shop_with_tag(Tag::Coupon);
+        g.money = 100;
+        assert!(g.shop.couponed, "the shop the tag lands in is free");
+        g.reroll().expect("reroll");
+        assert!(
+            !g.shop.couponed,
+            "only the initial stock is free, not rerolled items"
+        );
+    }
+
+    #[test]
+    fn test_coupon_tag_makes_a_joker_free() {
+        let mut g = game_in_shop_with_tag(Tag::Coupon);
+        g.jokers.clear();
+        let joker = Jokers::TheJoker(Default::default());
+        g.shop.jokers = vec![joker.clone()];
+        let before = g.money;
+        g.handle_action(Action::BuyJoker(joker)).expect("buy");
+        assert_eq!(g.money, before, "couponed joker costs nothing");
+        assert_eq!(g.jokers.len(), 1);
+    }
+
+    #[test]
+    fn test_d6_tag_makes_the_next_shops_rerolls_free() {
+        let mut g = game_in_shop_with_tag(Tag::D6);
+        assert_eq!(g.reroll_cost, 0);
+        g.reroll().expect("reroll");
+        assert_eq!(g.reroll_cost, 1, "the discount lasts one shop");
+    }
+
+    #[test]
+    fn test_juggle_tag_adds_three_hand_size_for_one_round() {
+        let mut g = game_in_shop_with_tag(Tag::Juggle);
+        let base = (g.config.available + g.vouchers.hand_size_bonus())
+            .min(g.config.available_max);
+        assert_eq!(g.hand_size(), base + 3);
+        g.next_round().expect("next round");
+        assert_eq!(g.hand_size(), base, "Juggle covers exactly one round");
+    }
+
+    #[test]
+    fn test_top_up_tag_spawns_common_jokers_while_there_is_room() {
+        let mut g = game_in_shop_with_tag(Tag::TopUp);
+        g.jokers.clear();
+        g.apply_tag(Tag::TopUp);
+        assert_eq!(g.jokers.len(), 2);
+        for joker in &g.jokers {
+            assert_eq!(joker.rarity(), Rarity::Common);
+        }
+    }
+
+    #[test]
+    fn test_top_up_tag_stops_at_the_joker_limit() {
+        let mut g = game_in_shop_with_tag(Tag::TopUp);
+        g.jokers.clear();
+        g.config.joker_slots = 1;
+        g.apply_tag(Tag::TopUp);
+        assert_eq!(g.jokers.len(), 1, "never exceeds the slot limit");
+    }
+
+    #[test]
+    fn test_double_tag_duplicates_the_next_tag_collected() {
+        let mut g = game_in_shop_with_tag(Tag::Double);
+        assert!(g.tag_state.double, "armed for the next tag");
+        g.money = 30;
+        g.apply_tag(Tag::Economy);
+        assert!(!g.tag_state.double, "disarmed once used");
+        assert_eq!(g.money, 100, "30 +30 then +40, capped at 40 each time");
+    }
+
+    #[test]
+    fn test_orbital_tag_levels_the_hand_chosen_when_it_was_drawn() {
+        let hand = HandRank::ThreeOfAKind;
+        let mut g = game_in_shop_with_tag(Tag::Orbital);
+        // The hand is picked at draw time so the player can see it before
+        // choosing to skip; force a known one for the assertion.
+        g.tag_state.orbital_hand = Some(hand);
+        let before = g.planetarium.level(hand).level;
+        g.apply_tag(Tag::Orbital);
+        assert_eq!(g.planetarium.level(hand).level, before + 3);
+    }
+
+    #[test]
+    fn test_boss_tag_rerolls_the_next_boss() {
+        let mut g = game_in_shop_with_tag(Tag::Boss);
+        assert!(g.tag_state.boss_reroll);
+        g.start_ante();
+        assert!(!g.tag_state.boss_reroll, "consumed by the boss draw");
+        assert!(g.current_boss.is_some());
+    }
+
+    #[test]
+    fn test_voucher_tag_offers_a_second_voucher() {
+        let g = game_in_shop_with_tag(Tag::Voucher);
+        assert!(
+            g.shop.voucher_tag_offer.is_some(),
+            "the Voucher Tag adds a second offer alongside the ante's own"
+        );
+    }
+
+    #[test]
+    fn test_voucher_tag_offer_is_buyable() {
+        let mut g = game_in_shop_with_tag(Tag::Voucher);
+        let offer = g.shop.voucher_tag_offer.expect("tag offer");
+        g.money = 100;
+        g.handle_action(Action::BuyVoucher(offer)).expect("buy");
+        assert!(g.vouchers.has(offer));
+        assert_eq!(g.shop.voucher_tag_offer, None);
+    }
+
+    #[test]
+    fn test_pack_tags_open_a_free_pack_of_the_right_shape() {
+        let cases = [
+            (Tag::Charm, PackCategory::Arcana, PackSize::Mega),
+            (Tag::Meteor, PackCategory::Celestial, PackSize::Mega),
+            (Tag::Buffoon, PackCategory::Buffoon, PackSize::Mega),
+            (Tag::Standard, PackCategory::Standard, PackSize::Mega),
+            // Spectral is the one pack tag that isn't a Mega.
+            (Tag::Ethereal, PackCategory::Spectral, PackSize::Normal),
+        ];
+        for (tag, category, size) in cases {
+            let g = game_in_shop_with_tag(tag);
+            assert_eq!(g.stage, Stage::PackOpen(), "{tag:?}");
+            let open = g.open_pack.as_ref().expect("pack open");
+            let expected = Pack {
+                category,
+                size,
+                contents: Vec::new(),
+            };
+            assert_eq!(open.description, expected.description(), "{tag:?}");
+            let picks = if size == PackSize::Mega { 2 } else { 1 };
+            assert_eq!(open.picks_remaining, picks, "{tag:?}");
+        }
+    }
+
+    #[test]
+    fn test_uncommon_tag_makes_one_shop_joker_free() {
+        let g = game_in_shop_with_tag(Tag::Uncommon);
+        assert!(g.tag_state.pending_free_joker.is_none(), "consumed on refill");
+        assert_eq!(g.shop.free_joker_slots.len(), 1);
+        let free = *g.shop.free_joker_slots.iter().next().unwrap();
+        assert_eq!(g.shop.jokers[free].rarity(), Rarity::Uncommon);
+    }
+
+    #[test]
+    fn test_rare_tag_makes_one_shop_joker_free_and_rare() {
+        let g = game_in_shop_with_tag(Tag::Rare);
+        assert_eq!(g.shop.free_joker_slots.len(), 1);
+        let free = *g.shop.free_joker_slots.iter().next().unwrap();
+        assert_eq!(g.shop.jokers[free].rarity(), Rarity::Rare);
+    }
+
+    #[test]
+    fn test_edition_tags_upgrade_the_next_base_edition_shop_joker() {
+        for (tag, edition) in [
+            (Tag::Foil, Edition::Foil),
+            (Tag::Holographic, Edition::Holographic),
+            (Tag::Polychrome, Edition::Polychrome),
+            (Tag::Negative, Edition::Negative),
+        ] {
+            let g = game_in_shop_with_tag(tag);
+            assert_eq!(g.shop.free_joker_slots.len(), 1, "{tag:?}");
+            let free = *g.shop.free_joker_slots.iter().next().unwrap();
+            assert_eq!(g.shop.jokers[free].edition(), edition, "{tag:?}");
+        }
+    }
+
+    #[test]
+    fn test_edition_tag_only_marks_a_joker_slot_free() {
+        // A tag can only convert a Joker, never a consumable, so a marked
+        // slot always indexes into `shop.jokers`.
+        let g = game_in_shop_with_tag(Tag::Foil);
+        for slot in &g.shop.free_joker_slots {
+            assert!(*slot < g.shop.jokers.len());
+        }
+    }
+
+    #[test]
+    fn test_tag_state_survives_a_save_load_round_trip() {
+        let mut g = game_in_shop_with_tag(Tag::Double);
+        g.apply_tag(Tag::Foil);
+        g.tag_state.investment = true;
+
+        let json = g.to_json().expect("serialize");
+        let loaded = Game::from_json(&json).expect("deserialize");
+        assert_eq!(loaded.tag_state.pending_edition, Some(Edition::Foil));
+        assert!(loaded.tag_state.investment);
+        assert_eq!(
+            loaded.shop.free_joker_slots.len(),
+            g.shop.free_joker_slots.len(),
+            "a free slot must stay free across a save/load"
+        );
+    }
+
+    #[test]
+    fn test_buying_a_free_joker_costs_nothing_and_clears_the_slot() {
+        let mut g = game_in_shop_with_tag(Tag::Foil);
+        let free = *g.shop.free_joker_slots.iter().next().unwrap();
+        let joker = g.shop.jokers[free].clone();
+        g.money = 0;
+        g.handle_action(Action::BuyJoker(joker)).expect("buy");
+        assert!(!g.shop.free_joker_slots.contains(&free));
+    }
+
     #[test]
     fn test_shop_offers_a_voucher_after_cashout() {
         let g = game_in_shop(0);
@@ -4568,6 +5874,457 @@ mod tests {
             .expect("BuyVoucher is unmasked in the shop");
         g.handle_action_index(index).expect("handle action index");
         assert!(g.vouchers.has(offered));
+    }
+
+    // --- boss blind modifiers ---
+
+    /// A game standing in the boss blind of its current ante, so
+    /// `active_boss` resolves.
+    fn game_in_boss_blind(boss: BossBlind) -> Game {
+        let mut g = Game::new(Config {
+            seed: Some(TAG_TEST_SEED),
+            ..Config::default()
+        });
+        g.current_boss = Some(boss);
+        g.blind = Some(Blind::Big);
+        g.stage = Stage::Blind(Blind::Big);
+        g.boss_state.on_new_blind();
+        g.boss_state.all_cards_debuffed = boss == BossBlind::VerdantLeaf;
+        g
+    }
+
+    /// Opens the boss blind's round, which deals the opening hand and runs
+    /// the boss's own setup.
+    fn enter_boss_blind(g: &mut Game) {
+        g.begin_round(Blind::Boss);
+    }
+
+    fn select_and_play(g: &mut Game, n: usize) -> Result<(), GameError> {
+        let cards: Vec<Card> = g.available.not_selected().iter().take(n).copied().collect();
+        for card in &cards {
+            g.select_card(*card)?;
+        }
+        g.play_selected()
+    }
+
+    #[test]
+    fn test_needle_allows_exactly_one_hand_per_round() {
+        let mut g = game_in_boss_blind(BossBlind::Needle);
+        enter_boss_blind(&mut g);
+        assert_eq!(g.plays_per_round(), 1);
+        g.plays = g.plays_per_round();
+        assert_eq!(g.plays, 1);
+        select_and_play(&mut g, 5).expect("play the one hand");
+        assert_eq!(g.plays, 0);
+        assert!(select_and_play(&mut g, 5).is_err(), "no second hand");
+    }
+
+    #[test]
+    fn test_psychic_requires_exactly_five_cards() {
+        // A fresh round per case: a rejected attempt still leaves its cards
+        // selected, so reusing one game would conflate the failures.
+        for n in [1, 4, 6, 8] {
+            let mut g = game_in_boss_blind(BossBlind::Psychic);
+            enter_boss_blind(&mut g);
+            assert!(
+                select_and_play(&mut g, n).is_err(),
+                "{n} cards must be rejected by The Psychic"
+            );
+        }
+        let mut g = game_in_boss_blind(BossBlind::Psychic);
+        enter_boss_blind(&mut g);
+        assert!(select_and_play(&mut g, 5).is_ok(), "exactly five is legal");
+    }
+
+    #[test]
+    fn test_eye_forbids_repeating_a_hand_type() {
+        let mut g = game_in_boss_blind(BossBlind::Eye);
+        enter_boss_blind(&mut g);
+        select_and_play(&mut g, 5).expect("first hand");
+        let rank = g.boss_state.last_played.expect("rank recorded");
+        // Replaying the same 5 cards is the same type, so it must fail.
+        let cards: Vec<Card> = g.deck.draw(5);
+        g.available.extend(cards);
+        assert_eq!(g.boss_state.last_played, Some(rank));
+        assert!(select_and_play(&mut g, 5).is_err(), "same type twice");
+    }
+
+    #[test]
+    fn test_mouth_locks_the_first_hand_type() {
+        let mut g = game_in_boss_blind(BossBlind::Mouth);
+        enter_boss_blind(&mut g);
+        select_and_play(&mut g, 2).expect("first hand sets the type");
+        let locked = g.boss_state.locked_rank.expect("locked");
+        assert!(check_rank(&g, locked).is_ok(), "the locked type stays legal");
+        assert!(check_rank(&g, other_rank(locked)).is_err(), "others do not");
+    }
+
+    fn check_rank(g: &Game, rank: HandRank) -> Result<(), GameError> {
+        g.check_boss_hand_rank(rank)
+    }
+
+    fn other_rank(rank: HandRank) -> HandRank {
+        if rank == HandRank::HighCard {
+            HandRank::OnePair
+        } else {
+            HandRank::HighCard
+        }
+    }
+
+    #[test]
+    fn test_tooth_charges_a_dollar_per_card_played() {
+        let mut g = game_in_boss_blind(BossBlind::Tooth);
+        enter_boss_blind(&mut g);
+        g.money = 20;
+        select_and_play(&mut g, 5).expect("play");
+        assert_eq!(g.money, 15, "$1 per card, five cards");
+    }
+
+    #[test]
+    fn test_ox_zeroes_money_on_the_most_played_hand() {
+        let mut g = game_in_boss_blind(BossBlind::Ox);
+        enter_boss_blind(&mut g);
+        g.money = 50;
+        // Nothing has been played yet, so every rank ties at zero plays and
+        // the most-played rank is whichever `max_by_key` settles on.
+        let most = g.most_played_hand_rank();
+        let cards: Vec<Card> = g.available.not_selected().to_vec();
+        g.boss_on_play(most, &cards)(&mut g);
+        assert_eq!(g.money, 0);
+    }
+
+    #[test]
+    fn test_ox_leaves_money_alone_for_other_hands() {
+        let mut g = game_in_boss_blind(BossBlind::Ox);
+        enter_boss_blind(&mut g);
+        g.money = 50;
+        let most = g.most_played_hand_rank();
+        let other = other_rank(most);
+        g.boss_on_play(other, &[])(&mut g);
+        assert_eq!(g.money, 50, "a hand that isn't the most played costs nothing");
+    }
+
+    #[test]
+    fn test_hook_discards_two_unplayed_cards_after_a_hand() {
+        let mut g = game_in_boss_blind(BossBlind::Hook);
+        enter_boss_blind(&mut g);
+        let before = g.discarded.len();
+        select_and_play(&mut g, 3).expect("play");
+        // The three played cards plus the two Hook discards.
+        assert_eq!(g.discarded.len(), before + 5);
+    }
+
+    #[test]
+    fn test_pillar_debuffs_cards_already_played_this_ante() {
+        let mut g = game_in_boss_blind(BossBlind::Pillar);
+        enter_boss_blind(&mut g);
+        let played: Vec<Card> = g.available.not_selected().iter().take(2).copied().collect();
+        assert!(!g.is_card_debuffed(&played[0]), "not yet played");
+        g.boss_on_play(HandRank::OnePair, &played)(&mut g);
+        assert!(
+            g.is_card_debuffed(&played[0]),
+            "a card stops scoring once it has been played this ante"
+        );
+    }
+
+    #[test]
+    fn test_pillar_forgets_at_the_next_ante() {
+        let mut g = game_in_boss_blind(BossBlind::Pillar);
+        enter_boss_blind(&mut g);
+        let card = g.deck.draw(1).remove(0);
+        g.boss_state.played_this_ante.insert(card.id);
+        assert!(g.is_card_debuffed(&card));
+        g.boss_state.on_new_ante();
+        assert!(!g.is_card_debuffed(&card), "the flag is per ante");
+    }
+
+    #[test]
+    fn test_wheel_adds_an_edition_to_a_random_joker() {
+        let mut g = game_in_boss_blind(BossBlind::Wheel);
+        enter_boss_blind(&mut g);
+        g.jokers = vec![Jokers::TheJoker(Default::default())];
+        // 1-in-4 per played card, so 200 cards is effectively certain.
+        g.boss_wheel_editions(200);
+        assert_ne!(
+            g.jokers[0].edition(),
+            Edition::Base,
+            "The Wheel should have upgraded the joker"
+        );
+    }
+
+    #[test]
+    fn test_crimson_heart_debuffs_exactly_one_joker() {
+        let mut g = game_in_boss_blind(BossBlind::CrimsonHeart);
+        g.jokers = vec![
+            Jokers::TheJoker(Default::default()),
+            Jokers::GreedyJoker(Default::default()),
+        ];
+        g.jokers[0].set_instance_id(1);
+        g.jokers[1].set_instance_id(2);
+        enter_boss_blind(&mut g);
+        let debuffed = g.boss_state.debuffed_joker.clone().expect("a victim");
+        let flag = g.jokers.iter().filter(|j| g.is_joker_debuffed(j)).count();
+        assert_eq!(flag, 1, "exactly one joker at a time");
+        assert_eq!(debuffed.instance_id(), 1);
+    }
+
+    #[test]
+    fn test_crimson_heart_releases_its_victim_between_hands() {
+        let mut g = game_in_boss_blind(BossBlind::CrimsonHeart);
+        g.jokers = vec![Jokers::TheJoker(Default::default())];
+        g.jokers[0].set_instance_id(1);
+        enter_boss_blind(&mut g);
+        assert!(g.is_joker_debuffed(&g.jokers[0]));
+        g.boss_crimson_heart();
+        assert!(
+            g.is_joker_debuffed(&g.jokers[0]),
+            "a single joker stays debuffed, matching the real game"
+        );
+    }
+
+    #[test]
+    fn test_crimson_heart_stops_when_the_boss_stops() {
+        let mut g = game_in_boss_blind(BossBlind::CrimsonHeart);
+        g.jokers = vec![Jokers::TheJoker(Default::default())];
+        enter_boss_blind(&mut g);
+        g.blind = Some(Blind::Big);
+        g.boss_crimson_heart();
+        assert!(g.boss_state.debuffed_joker.is_none());
+    }
+
+    #[test]
+    fn test_verdant_leaf_debuffs_every_card_until_a_joker_is_sold() {
+        let mut g = game_in_boss_blind(BossBlind::VerdantLeaf);
+        enter_boss_blind(&mut g);
+        g.jokers = vec![Jokers::TheJoker(Default::default())];
+        let card = g.available.not_selected()[0];
+        assert!(g.is_card_debuffed(&card), "everything is debuffed");
+
+        g.sell_joker(0).expect("sell");
+        assert!(
+            !g.is_card_debuffed(&card),
+            "selling a Joker lifts the debuff"
+        );
+        assert_eq!(g.active_boss(), None, "and disables the boss");
+    }
+
+    #[test]
+    fn test_amber_acorn_shuffles_the_joker_row() {
+        let mut g = game_in_boss_blind(BossBlind::AmberAcorn);
+        g.jokers = vec![
+            Jokers::TheJoker(Default::default()),
+            Jokers::GreedyJoker(Default::default()),
+            Jokers::LustyJoker(Default::default()),
+            Jokers::WrathfulJoker(Default::default()),
+        ];
+        let before: Vec<usize> = g.jokers.iter().map(|j| j.instance_id()).collect();
+        enter_boss_blind(&mut g);
+        let after: Vec<usize> = g.jokers.iter().map(|j| j.instance_id()).collect();
+        assert_eq!(before.len(), after.len(), "a shuffle, not a drop");
+        let mut a = before.clone();
+        let mut b = after.clone();
+        a.sort_unstable();
+        b.sort_unstable();
+        assert_eq!(a, b, "the same jokers, reordered");
+    }
+
+    #[test]
+    fn test_house_deals_its_first_hand_face_down() {
+        let mut g = game_in_boss_blind(BossBlind::House);
+        enter_boss_blind(&mut g);
+        assert!(
+            g.available.cards().iter().all(|c| c.face_down),
+            "the opening hand is face down"
+        );
+    }
+
+    #[test]
+    fn test_mark_deals_face_cards_face_down() {
+        let mut g = game_in_boss_blind(BossBlind::Mark);
+        enter_boss_blind(&mut g);
+        for card in g.available.cards() {
+            assert_eq!(
+                card.face_down,
+                g.is_face_card(&card),
+                "{:?} of {:?}",
+                card.value,
+                card.suit
+            );
+        }
+    }
+
+    #[test]
+    fn test_face_down_never_survives_a_blind() {
+        let mut g = game_in_boss_blind(BossBlind::Mark);
+        enter_boss_blind(&mut g);
+        assert!(g.available.cards().iter().any(|c| c.face_down));
+        g.clear_blind();
+        assert!(
+            g.deck.cards().iter().all(|c| !c.face_down),
+            "everything flips back at the end of the round"
+        );
+    }
+
+    #[test]
+    fn test_face_down_does_not_change_scoring() {
+        // A face-down card is still scored and still selectable, which is
+        // what makes these bosses informational rather than mechanical.
+        let mut g = game_in_boss_blind(BossBlind::Mark);
+        enter_boss_blind(&mut g);
+        let cards: Vec<Card> = g.available.not_selected().iter().take(5).copied().collect();
+        for card in &cards {
+            g.select_card(*card).expect("select");
+        }
+        let mut down = g.clone();
+        down.force_everything_face_down();
+        let a = SelectHand::new(down.available.selected())
+            .best_hand()
+            .map(|h| down.calc_score(h));
+        let b = SelectHand::new(g.available.selected())
+            .best_hand()
+            .map(|h| g.calc_score(h));
+        assert_eq!(a, b, "face down must not move the score");
+    }
+
+    #[test]
+    fn test_cerulean_bell_pins_a_card_selected() {
+        let mut g = game_in_boss_blind(BossBlind::CeruleanBell);
+        enter_boss_blind(&mut g);
+        let forced = g.boss_state.forced_card.expect("a forced card");
+        assert!(
+            g.available.selected().iter().any(|c| c.id == forced),
+            "the pinned card is already selected"
+        );
+        let card = *g.available.selected().iter().find(|c| c.id == forced).unwrap();
+        assert!(g.deselect_card(card).is_err(), "and cannot be released");
+    }
+
+    #[test]
+    fn test_cerulean_bell_leaves_other_cards_alone() {
+        let mut g = game_in_boss_blind(BossBlind::CeruleanBell);
+        enter_boss_blind(&mut g);
+        let forced = g.boss_state.forced_card.expect("a forced card");
+        let other = g
+            .available
+            .selected()
+            .iter()
+            .find(|c| c.id != forced)
+            .copied();
+        if let Some(other) = other {
+            assert!(g.deselect_card(other).is_ok(), "other cards are free");
+        }
+    }
+
+    #[test]
+    fn test_every_boss_blind_resolves_as_the_active_boss() {
+        for boss in BossBlind::iter() {
+            let mut g = game_in_boss_blind(boss);
+            enter_boss_blind(&mut g);
+            assert_eq!(
+                g.active_boss(),
+                Some(boss),
+                "{boss:?} should be the active boss inside its own blind"
+            );
+        }
+    }
+
+    #[test]
+    fn test_psychic_never_offers_an_illegal_play() {
+        // The generator and `play_selected` have to agree: offering a Play
+        // the engine then rejects is a bug the full-game stress tests catch
+        // only by luck.
+        let mut g = game_in_boss_blind(BossBlind::Psychic);
+        enter_boss_blind(&mut g);
+        g.available.empty();
+        g.available.extend(
+            (0..8)
+                .map(|i| Card::new(Value::Two, if i % 2 == 0 { Suit::Heart } else { Suit::Club }))
+                .collect(),
+        );
+        // Three selected is not five.
+        let cards = g.available.not_selected();
+        for card in cards.iter().take(3) {
+            g.select_card(*card).expect("select");
+        }
+        assert!(
+            g.gen_actions().all(|a| a != Action::Play()),
+            "no Play while the hand is the wrong size"
+        );
+        // Widen to exactly five: release two, take four.
+        for card in g.available.selected().iter().take(2) {
+            g.deselect_card(*card).expect("deselect");
+        }
+        for card in g.available.not_selected().iter().take(4) {
+            g.select_card(*card).expect("select");
+        }
+        assert_eq!(g.available.selected().len(), 5);
+        assert!(g.gen_actions().any(|a| a == Action::Play()));
+    }
+
+    #[test]
+    fn test_eye_never_offers_a_repeated_hand_type() {
+        let mut g = game_in_boss_blind(BossBlind::Eye);
+        enter_boss_blind(&mut g);
+        g.available.empty();
+        g.available.extend(
+            (0..8)
+                .map(|i| Card::new(Value::Two, if i % 2 == 0 { Suit::Heart } else { Suit::Club }))
+                .collect(),
+        );
+        let cards = g.available.not_selected();
+        for card in cards.iter().take(5) {
+            g.select_card(*card).expect("select");
+        }
+        assert!(g.gen_actions().any(|a| a == Action::Play()));
+        g.play_selected().expect("play a pair");
+        // Same five-card shape again, so the same type, so no Play.
+        g.available.empty();
+        g.available.extend(
+            (0..8)
+                .map(|i| Card::new(Value::Two, if i % 2 == 0 { Suit::Heart } else { Suit::Club }))
+                .collect(),
+        );
+        let cards = g.available.not_selected();
+        for card in cards.iter().take(5) {
+            g.select_card(*card).expect("select");
+        }
+        assert!(
+            g.gen_actions().all(|a| a != Action::Play()),
+            "The Eye forbids the same type twice"
+        );
+    }
+
+    #[test]
+    fn test_cerulean_bell_never_offers_deselecting_its_pinned_card() {
+        let mut g = game_in_boss_blind(BossBlind::CeruleanBell);
+        enter_boss_blind(&mut g);
+        let pinned = g.boss_state.forced_card.expect("pinned");
+        for card in g.available.not_selected().iter().take(3) {
+            g.select_card(*card).expect("select");
+        }
+        let offered: Vec<Action> = g.gen_actions().collect();
+        assert!(
+            !offered.contains(&Action::DeselectCard(
+                g.available
+                    .selected()
+                    .into_iter()
+                    .find(|c| c.id == pinned)
+                    .expect("pinned card is selected")
+            )),
+            "the pinned card cannot be released"
+        );
+    }
+
+    #[test]
+    fn test_boss_blinds_are_only_active_on_the_boss_blind() {
+        for boss in BossBlind::iter() {
+            let g = game_in_boss_blind(boss);
+            assert_eq!(
+                g.active_boss(),
+                None,
+                "{boss:?} must not apply on a small or big blind"
+            );
+        }
     }
 
     #[test]

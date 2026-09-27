@@ -1,7 +1,9 @@
 use crate::action::{Action, MoveDirection, SortBy};
-use crate::card::Edition;
+use crate::card::{Card, Edition};
+use crate::hand::SelectHand;
 use crate::consumable::Consumable;
 use crate::game::Game;
+use balatro_types::BossBlind;
 use crate::pack::PackContent;
 use crate::space::ActionSpace;
 use crate::stage::{Blind, BlindExt, Stage};
@@ -31,7 +33,14 @@ impl Game {
         if !self.stage.is_blind() {
             return None;
         }
-        let selected = self.available.selected();
+        // The Cerulean Bell pins one card, which cannot be released.
+        let pinned = self.boss_state.forced_card;
+        let selected: Vec<Card> = self
+            .available
+            .selected()
+            .into_iter()
+            .filter(|c| Some(c.id) != pinned)
+            .collect();
         if selected.is_empty() {
             return None;
         }
@@ -52,8 +61,30 @@ impl Game {
         if self.available.selected().is_empty() {
             return None;
         }
+        // The Psychic, The Eye and The Mouth can make the current selection
+        // unplayable, so the shape has to be checked before offering Play.
+        if !self.play_is_legal() {
+            return None;
+        }
         let combos = vec![Action::Play()].into_iter();
         Some(combos)
+    }
+
+    // Get all legal Play actions that can be executed given current state
+    /// Whether the current selection would survive `play_selected`'s boss
+    /// checks. The rank checks need the hand, which can only be built from a
+    /// selection, so this is the same work the play does.
+    fn play_is_legal(&self) -> bool {
+        if self.active_boss() == Some(BossBlind::Psychic)
+            && self.available.selected().len() != crate::game::PSYCHIC_HAND_SIZE
+        {
+            return false;
+        }
+        let Ok(hand) = SelectHand::new(self.available.selected()).best_hand_with(self.hand_rules())
+        else {
+            return false;
+        };
+        self.check_boss_hand_rank(hand.rank).is_ok()
     }
 
     // Get all legal Play actions that can be executed given current state
@@ -184,6 +215,37 @@ impl Game {
     }
 
     // Get use consumable actions
+    /// Whether `use_consumable` would accept this card right now. Both
+    /// public move APIs go through here, so the mask and the iterator can
+    /// never disagree about what is legal.
+    fn can_use_consumable(&self, consumable: &Consumable) -> bool {
+        if matches!(
+            self.stage,
+            Stage::End(_) | Stage::TarotHand(_) | Stage::SpectralHand(_) | Stage::PackOpen()
+        ) {
+            return false;
+        }
+        // `requires_hand`, not `requires_targets`: several Spectrals touch
+        // the hand without needing a card selected (Sigil, Familiar, ...),
+        // and they are gated the same way. This is the predicate
+        // `use_consumable` validates against.
+        let (min_targets, max_targets, requires_hand) = match consumable {
+            Consumable::Planet(_) => return true,
+            Consumable::Tarot(t) => (t.min_targets(), t.max_targets(), t.requires_hand()),
+            Consumable::Spectral(s) => (s.min_targets(), s.max_targets(), s.requires_hand()),
+        };
+        if !requires_hand {
+            return true;
+        }
+        // Targeting tarots and spectrals need a live hand and a legal
+        // selection already made.
+        if !self.stage.is_blind() {
+            return false;
+        }
+        let selected = self.available.selected().len();
+        (min_targets..=max_targets).contains(&selected)
+    }
+
     fn gen_actions_use_consumable(&self) -> Option<impl Iterator<Item = Action>> {
         if matches!(
             self.stage,
@@ -194,28 +256,10 @@ impl Game {
         if self.consumables.is_empty() {
             return None;
         }
-        let selected_count = self.available.selected().len();
         let actions: Vec<Action> = self
             .consumables
             .iter()
-            .filter(|c| match c {
-                Consumable::Planet(_) => true,
-                // Hand-touching tarots are only usable during Blind, with a valid
-                // target selection already made; non-hand-touching ones are always usable.
-                Consumable::Tarot(t) => {
-                    !t.requires_hand()
-                        || (self.stage.is_blind()
-                            && selected_count >= t.min_targets()
-                            && selected_count <= t.max_targets())
-                }
-                // Same eligibility shape as Tarot above.
-                Consumable::Spectral(s) => {
-                    !s.requires_hand()
-                        || (self.stage.is_blind()
-                            && selected_count >= s.min_targets()
-                            && selected_count <= s.max_targets())
-                }
-            })
+            .filter(|c| self.can_use_consumable(c))
             .cloned()
             .map(Action::UseConsumable)
             .collect();
@@ -343,10 +387,13 @@ impl Game {
             vec![]
         };
 
+        // The Cerulean Bell pins one card, which cannot be released.
+        let pinned = self.boss_state.forced_card;
         let deselect_cards: Vec<Action> = self
             .available
             .selected()
             .into_iter()
+            .filter(|c| Some(c.id) != pinned)
             .map(Action::DeselectCard)
             .collect();
 
@@ -408,10 +455,13 @@ impl Game {
             vec![]
         };
 
+        // The Cerulean Bell pins one card, which cannot be released.
+        let pinned = self.boss_state.forced_card;
         let deselect_cards: Vec<Action> = self
             .available
             .selected()
             .into_iter()
+            .filter(|c| Some(c.id) != pinned)
             .map(Action::DeselectCard)
             .collect();
 
@@ -536,8 +586,10 @@ impl Game {
         if self.available.selected().is_empty() {
             return;
         }
-        // Can only play/discard is have remaining
-        if self.plays != 0 {
+        // Can only play/discard is have remaining. Play also has to be
+        // legal for the boss in play, or the mask would offer a move
+        // `handle_action` rejects.
+        if self.plays != 0 && self.play_is_legal() {
             space.unmask_play();
         }
         if self.discards() != 0 {
@@ -645,37 +697,8 @@ impl Game {
     }
 
     fn unmask_action_space_use_consumable(&self, space: &mut ActionSpace) {
-        if matches!(
-            self.stage,
-            Stage::End(_) | Stage::TarotHand(_) | Stage::SpectralHand(_)
-        ) {
-            return;
-        }
-        let selected_count = self.available.selected().len();
         self.consumables.iter().enumerate().for_each(|(i, c)| {
-            let valid = match c {
-                Consumable::Planet(_) => true,
-                Consumable::Tarot(t) => {
-                    if !t.requires_targets() {
-                        true
-                    } else if self.stage.is_blind() {
-                        selected_count >= t.min_targets() && selected_count <= t.max_targets()
-                    } else {
-                        true
-                    }
-                }
-                // Same eligibility shape as Tarot above.
-                Consumable::Spectral(s) => {
-                    if !s.requires_targets() {
-                        true
-                    } else if self.stage.is_blind() {
-                        selected_count >= s.min_targets() && selected_count <= s.max_targets()
-                    } else {
-                        true
-                    }
-                }
-            };
-            if valid {
+            if self.can_use_consumable(c) {
                 space
                     .unmask_use_consumable(i)
                     .expect("valid index for use consumable");
@@ -723,10 +746,7 @@ impl Game {
         if self.stage != Stage::Shop() {
             return;
         }
-        if self.shop.voucher.is_none_or(|v| v.cost() > self.money) {
-            return;
-        }
-        space.unmask_buy_voucher();
+        space.unmask_buy_voucher(self);
     }
 
     fn unmask_action_space_buy_playing_card(&self, space: &mut ActionSpace) {

@@ -33,6 +33,16 @@ pub struct Card {
     pub edition: Edition,
     pub enhancement: Option<Enhancement>,
     pub seal: Option<Seal>,
+    /// Permanent extra chips, added by Hiker. Unlike `Enhancement::Bonus`
+    /// this isn't an enhancement and can't be removed.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub bonus_chips: usize,
+    /// Face down in the hand. Purely informational — a face-down card is
+    /// still scored and still selectable — but it is what The House, The
+    /// Mark, The Fish and The Wheel actually do, and what the UI has to
+    /// hide. Reset at the end of every blind.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub face_down: bool,
 }
 
 impl Card {
@@ -45,6 +55,8 @@ impl Card {
             edition: Edition::Base,
             enhancement: None,
             seal: None,
+            bonus_chips: 0,
+            face_down: false,
         }
     }
 

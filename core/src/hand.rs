@@ -37,6 +37,42 @@ pub struct MadeHand {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct SelectHand(Vec<Card>);
 
+/// Which of the four partial-hand jokers are in play. Held by value
+/// rather than a reference so the evaluator stays a pure function and
+/// the same rules apply identically to a straight and a flush.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HandRules {
+    /// Four Fingers drops the size a straight and a flush need.
+    pub hand_size: usize,
+    pub gappy_straights: bool,
+    pub smeared_suits: bool,
+}
+
+impl Default for HandRules {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl HandRules {
+    pub const DEFAULT: Self = Self {
+        hand_size: 5,
+        gappy_straights: false,
+        smeared_suits: false,
+    };
+
+    /// Smeared Joker collapses the four suits onto two groups.
+    pub fn suit_group(suit: Suit, smeared: bool) -> u8 {
+        if !smeared {
+            return suit as u8;
+        }
+        match suit {
+            Suit::Heart | Suit::Diamond => 0,
+            Suit::Spade | Suit::Club => 1,
+        }
+    }
+}
+
 impl SelectHand {
     pub fn new(cards: Vec<Card>) -> Self {
         Self(cards)
@@ -125,32 +161,40 @@ impl SelectHand {
     // OnePair
     // HighCard
     pub fn best_hand(&self) -> Result<MadeHand, PlayHandError> {
+        self.best_hand_with(HandRules::DEFAULT)
+    }
+
+    pub fn best_hand_with(&self, rules: HandRules) -> Result<MadeHand, PlayHandError> {
         if self.0.is_empty() {
             return Err(PlayHandError::NoCards);
         }
         if self.len() > 5 {
             return Err(PlayHandError::TooManyCards);
         }
+        // With Four Fingers a straight or flush can be made from four
+        // cards, so a five-card selection is still eligible; below five
+        // nothing changes.
+        let r = rules;
 
         // We start trying to evaluate best hands first, so we
         // can return best hand right when we find it.
-        let (hand, rank) = if let Some(hand) = self.is_flush_five() {
+        let (hand, rank) = if let Some(hand) = self.is_flush_five(r) {
             (hand, HandRank::FlushFive)
-        } else if let Some(hand) = self.is_flush_house() {
+        } else if let Some(hand) = self.is_flush_house(r) {
             (hand, HandRank::FlushHouse)
         } else if let Some(hand) = self.is_five_of_kind() {
             (hand, HandRank::FiveOfAKind)
-        } else if let Some(hand) = self.is_royal_flush() {
+        } else if let Some(hand) = self.is_royal_flush(r) {
             (hand, HandRank::RoyalFlush)
-        } else if let Some(hand) = self.is_straight_flush() {
+        } else if let Some(hand) = self.is_straight_flush(r) {
             (hand, HandRank::StraightFlush)
         } else if let Some(hand) = self.is_four_of_kind() {
             (hand, HandRank::FourOfAKind)
         } else if let Some(hand) = self.is_fullhouse() {
             (hand, HandRank::FullHouse)
-        } else if let Some(hand) = self.is_flush() {
+        } else if let Some(hand) = self.is_flush(r) {
             (hand, HandRank::Flush)
-        } else if let Some(hand) = self.is_straight() {
+        } else if let Some(hand) = self.is_straight(r) {
             (hand, HandRank::Straight)
         } else if let Some(hand) = self.is_three_of_kind() {
             (hand, HandRank::ThreeOfAKind)
@@ -223,13 +267,20 @@ impl SelectHand {
         Some(SelectHand::new(self.cards_of_values(&[value])))
     }
 
-    pub(crate) fn is_straight(&self) -> Option<SelectHand> {
-        if self.len() != 5 {
+    pub(crate) fn is_straight(&self, rules: HandRules) -> Option<SelectHand> {
+        if self.len() != rules.hand_size {
             return None;
         }
-        // Iterate our sorted values. Each value must be one more than the previous.
+        // Iterate our sorted values. Each value must be one more than the
+        // previous, or with Shortcut up to two more.
         let values = self.values();
-        if values.windows(2).all(|v| (v[1] as u16 - v[0] as u16) == 1) {
+        let step = if rules.gappy_straights { 2 } else { 1 };
+        if values.windows(2).all(|v| (v[1] as u16 - v[0] as u16) == step) {
+            return Some(self.clone());
+        }
+        // With Shortcut a straight may still contain a run of consecutive
+        // ranks, just not exclusively.
+        if rules.gappy_straights && self.has_consecutive_run(&values, rules.hand_size) {
             return Some(self.clone());
         }
 
@@ -238,11 +289,11 @@ impl SelectHand {
         // Therefore, we can check that last value is ace, first value is two.
         // Then remove the last value (ace) from vec and check for incremental values
         // for everything else (2, 3, 4, 5).
-        if values[4] == Value::Ace && values[0] == Value::Two {
+        if values[values.len() - 1] == Value::Ace && values[0] == Value::Two {
             let skip_last: Vec<Value> = values.into_iter().rev().skip(1).rev().collect();
             if skip_last
                 .windows(2)
-                .all(|v| (v[1] as u16 - v[0] as u16) == 1)
+                .all(|v| (v[1] as u16 - v[0] as u16) == step)
             {
                 return Some(self.clone());
             }
@@ -250,8 +301,16 @@ impl SelectHand {
         None
     }
 
-    pub(crate) fn is_flush(&self) -> Option<SelectHand> {
-        if self.len() < 5 {
+    /// Whether some `size`-long window of the sorted values is a run of
+    /// consecutive ranks. Shortcut's rule: any such window counts.
+    fn has_consecutive_run(&self, values: &[Value], size: usize) -> bool {
+        values.windows(size).any(|w| {
+            w.windows(2).all(|v| (v[1] as u16 - v[0] as u16) == 1)
+        })
+    }
+
+    pub(crate) fn is_flush(&self, rules: HandRules) -> Option<SelectHand> {
+        if self.len() < rules.hand_size {
             return None;
         }
         // Each wild card in hand reduces the number of a suit needed to make a flush
@@ -263,19 +322,22 @@ impl SelectHand {
             .cloned()
             .collect();
         let wild_count = wilds.len();
-        let needed = 5usize.saturating_sub(wild_count);
+        let needed = rules.hand_size.saturating_sub(wild_count);
 
         if needed == 0 {
             return Some(self.clone());
         }
 
-        let mut suit_groups: IndexMap<Suit, Vec<Card>> = IndexMap::new();
+        let mut suit_groups: IndexMap<u8, Vec<Card>> = IndexMap::new();
         for card in self
             .0
             .iter()
             .filter(|c| c.enhancement != Some(Enhancement::Wild))
         {
-            suit_groups.entry(card.suit).or_default().push(*card);
+            suit_groups
+                .entry(HandRules::suit_group(card.suit, rules.smeared_suits))
+                .or_default()
+                .push(*card);
         }
 
         if let Some((_, mut cards)) = suit_groups.into_iter().find(|(_, v)| v.len() >= needed) {
@@ -314,15 +376,15 @@ impl SelectHand {
         Some(SelectHand::new(self.cards_of_values(&[value])))
     }
 
-    pub(crate) fn is_straight_flush(&self) -> Option<SelectHand> {
-        if self.is_flush().is_some() && self.is_straight().is_some() {
+    pub(crate) fn is_straight_flush(&self, rules: HandRules) -> Option<SelectHand> {
+        if self.is_flush(rules).is_some() && self.is_straight(rules).is_some() {
             return Some(self.clone());
         }
         None
     }
 
-    pub(crate) fn is_royal_flush(&self) -> Option<SelectHand> {
-        if self.is_straight_flush().is_some()
+    pub(crate) fn is_royal_flush(&self, rules: HandRules) -> Option<SelectHand> {
+        if self.is_straight_flush(rules).is_some()
             && self.values().into_iter().eq(vec![
                 Value::Ten,
                 Value::Jack,
@@ -347,15 +409,26 @@ impl SelectHand {
         Some(SelectHand::new(self.cards_of_values(&[value])))
     }
 
-    pub(crate) fn is_flush_house(&self) -> Option<SelectHand> {
-        if self.is_flush().is_some() && self.is_fullhouse().is_some() {
+    /// Flush House and Flush Five always need a five-card flush, so
+    /// Four Fingers doesn't apply to them. Smeared Joker still does.
+    fn five_card_rules(rules: HandRules) -> HandRules {
+        HandRules {
+            hand_size: 5,
+            ..rules
+        }
+    }
+
+    pub(crate) fn is_flush_house(&self, rules: HandRules) -> Option<SelectHand> {
+        if self.is_flush(Self::five_card_rules(rules)).is_some() && self.is_fullhouse().is_some() {
             return Some(self.clone());
         }
         None
     }
 
-    pub(crate) fn is_flush_five(&self) -> Option<SelectHand> {
-        if self.is_flush().is_some() && self.is_five_of_kind().is_some() {
+    pub(crate) fn is_flush_five(&self, rules: HandRules) -> Option<SelectHand> {
+        if self.is_flush(Self::five_card_rules(rules)).is_some()
+            && self.is_five_of_kind().is_some()
+        {
             return Some(self.clone());
         }
         None
@@ -761,27 +834,27 @@ mod tests {
 
         // Valid 5 (2, 3, 4 ,5 ,6)
         let hand = SelectHand::new(vec![c2, c3, c4, c5, c6]);
-        let straight = hand.is_straight();
+        let straight = hand.is_straight(crate::hand::HandRules::DEFAULT);
         assert_eq!(straight.unwrap().len(), 5);
 
         // Valid 5 with low ace (A, 2, 3, 4 ,5)
         let hand = SelectHand::new(vec![c1, c2, c3, c4, c5]);
-        let straight = hand.is_straight();
+        let straight = hand.is_straight(crate::hand::HandRules::DEFAULT);
         assert_eq!(straight.unwrap().len(), 5);
 
         // Invalid 5 (2, 3, 4, 5, 7)
         let hand = SelectHand::new(vec![c2, c3, c4, c5, c7]);
-        let straight = hand.is_straight();
+        let straight = hand.is_straight(crate::hand::HandRules::DEFAULT);
         assert_eq!(straight, None);
 
         // Invalid 5 with low ace (A, 2, 3, 4, 7)
         let hand = SelectHand::new(vec![c1, c2, c3, c4, c7]);
-        let straight = hand.is_straight();
+        let straight = hand.is_straight(crate::hand::HandRules::DEFAULT);
         assert_eq!(straight, None);
 
         // Invalid 4 (2, 3, 4, 5)
         let hand = SelectHand::new(vec![c2, c3, c4, c5]);
-        let straight = hand.is_straight();
+        let straight = hand.is_straight(crate::hand::HandRules::DEFAULT);
         assert_eq!(straight, None);
     }
 
@@ -796,22 +869,22 @@ mod tests {
 
         // Valid 5 (h, h, h, h, h)
         let hand = SelectHand::new(vec![c1, c2, c3, c4, c5]);
-        let flush = hand.is_flush();
+        let flush = hand.is_flush(crate::hand::HandRules::DEFAULT);
         assert_eq!(flush.unwrap().len(), 5);
 
         // Valid 5 from 7 cards (h, h, h, h, h, d, d)
         let hand = SelectHand::new(vec![c1, c2, c3, c4, c5, not, not]);
-        let flush = hand.is_flush();
+        let flush = hand.is_flush(crate::hand::HandRules::DEFAULT);
         assert_eq!(flush.unwrap().len(), 5);
 
         // Invalid 5 (h, h, h, h, d)
         let hand = SelectHand::new(vec![c1, c2, c3, c4, not]);
-        let flush = hand.is_flush();
+        let flush = hand.is_flush(crate::hand::HandRules::DEFAULT);
         assert_eq!(flush, None);
 
         // Invalid 4 (h, h, h, h)
         let hand = SelectHand::new(vec![c1, c2, c3, c4]);
-        let flush = hand.is_flush();
+        let flush = hand.is_flush(crate::hand::HandRules::DEFAULT);
         assert_eq!(flush, None);
     }
 
@@ -921,27 +994,27 @@ mod tests {
 
         // Valid 5 (2h, 3h, 4h, 5h ,6h)
         let hand = SelectHand::new(vec![c2, c3, c4, c5, c6]);
-        let sf = hand.is_straight_flush();
+        let sf = hand.is_straight_flush(crate::hand::HandRules::DEFAULT);
         assert_eq!(sf.unwrap().len(), 5);
 
         // Valid 5 with low ace (Ah, 2h, 3h, 4h, 5h)
         let hand = SelectHand::new(vec![c1, c2, c3, c4, c5]);
-        let sf = hand.is_straight_flush();
+        let sf = hand.is_straight_flush(crate::hand::HandRules::DEFAULT);
         assert_eq!(sf.unwrap().len(), 5);
 
         // Invalid 5, wrong value (2h, 3h, 4h, 5h, 7h)
         let hand = SelectHand::new(vec![c2, c3, c4, c5, not1]);
-        let sf = hand.is_straight_flush();
+        let sf = hand.is_straight_flush(crate::hand::HandRules::DEFAULT);
         assert_eq!(sf, None);
 
         // Invalid 5, wrong suit (2h, 3h, 4h, 5h, 6d)
         let hand = SelectHand::new(vec![c2, c3, c4, c5, not2]);
-        let sf = hand.is_straight_flush();
+        let sf = hand.is_straight_flush(crate::hand::HandRules::DEFAULT);
         assert_eq!(sf, None);
 
         // Invalid 4 (2h, 3h, 4h, 5h)
         let hand = SelectHand::new(vec![c2, c3, c4, c5]);
-        let sf = hand.is_straight_flush();
+        let sf = hand.is_straight_flush(crate::hand::HandRules::DEFAULT);
         assert_eq!(sf, None);
     }
 
@@ -957,27 +1030,27 @@ mod tests {
 
         // Valid 5 (10s, Js, Qs, Ks, As)
         let hand = SelectHand::new(vec![c1, c2, c3, c4, c5]);
-        let rf = hand.is_royal_flush();
+        let rf = hand.is_royal_flush(crate::hand::HandRules::DEFAULT);
         assert_eq!(rf.unwrap().len(), 5);
 
         // Valid 5, scrambled input order (Js, 10s, Ks, Qs, As)
         let hand = SelectHand::new(vec![c2, c1, c4, c3, c5]);
-        let rf = hand.is_royal_flush();
+        let rf = hand.is_royal_flush(crate::hand::HandRules::DEFAULT);
         assert_eq!(rf.unwrap().len(), 5);
 
         // Invalid 5, wrong value (9s, Js, Qs, Ks, As)
         let hand = SelectHand::new(vec![not1, c2, c3, c4, c5]);
-        let rf = hand.is_royal_flush();
+        let rf = hand.is_royal_flush(crate::hand::HandRules::DEFAULT);
         assert_eq!(rf, None);
 
         // Invalid 5, wrong suit (10s, Js, Qs, Ks, Ad)
         let hand = SelectHand::new(vec![c1, c2, c3, c4, not2]);
-        let rf = hand.is_royal_flush();
+        let rf = hand.is_royal_flush(crate::hand::HandRules::DEFAULT);
         assert_eq!(rf, None);
 
         // Invalid 4 (2h, 3h, 4h, 5h)
         let hand = SelectHand::new(vec![c2, c3, c4, c5]);
-        let rf = hand.is_royal_flush();
+        let rf = hand.is_royal_flush(crate::hand::HandRules::DEFAULT);
         assert_eq!(rf, None);
     }
 
@@ -1037,22 +1110,22 @@ mod tests {
 
         // Valid 5 (Kh, Kh, Kh, Ah, Ah)
         let hand = SelectHand::new(vec![c1, c2, c3, c4, c5]);
-        let fh = hand.is_flush_house();
+        let fh = hand.is_flush_house(crate::hand::HandRules::DEFAULT);
         assert_eq!(fh.unwrap().len(), 5);
 
         // Invalid 5 (Kh, Kh, Kh, Ah, 2h)
         let hand = SelectHand::new(vec![c1, c2, c3, c4, not1]);
-        let fh = hand.is_flush_house();
+        let fh = hand.is_flush_house(crate::hand::HandRules::DEFAULT);
         assert_eq!(fh, None);
 
         // Invalid 5 (Kh, Kh, Kh, Ah, Ad)
         let hand = SelectHand::new(vec![c1, c2, c3, c4, not2]);
-        let fh = hand.is_flush_house();
+        let fh = hand.is_flush_house(crate::hand::HandRules::DEFAULT);
         assert_eq!(fh, None);
 
         // Invalid 4 (Kh, Kh, Kh, Ah)
         let hand = SelectHand::new(vec![c1, c2, c3, c4]);
-        let fh = hand.is_flush_house();
+        let fh = hand.is_flush_house(crate::hand::HandRules::DEFAULT);
         assert_eq!(fh, None);
     }
 
@@ -1067,8 +1140,8 @@ mod tests {
         wild.enhancement = Some(Enhancement::Wild);
 
         let hand = SelectHand::new(vec![c1, c2, c3, c4, wild]);
-        assert!(hand.is_flush().is_some());
-        assert_eq!(hand.is_flush().unwrap().len(), 5);
+        assert!(hand.is_flush(crate::hand::HandRules::DEFAULT).is_some());
+        assert_eq!(hand.is_flush(crate::hand::HandRules::DEFAULT).unwrap().len(), 5);
     }
 
     #[test]
@@ -1082,7 +1155,7 @@ mod tests {
         wild.enhancement = Some(Enhancement::Wild);
 
         let hand = SelectHand::new(vec![c1, c2, c3, c4, wild]);
-        assert!(hand.is_flush().is_none());
+        assert!(hand.is_flush(crate::hand::HandRules::DEFAULT).is_none());
     }
 
     #[test]
@@ -1097,7 +1170,7 @@ mod tests {
         wild2.enhancement = Some(Enhancement::Wild);
 
         let hand = SelectHand::new(vec![c1, c2, c3, wild1, wild2]);
-        assert!(hand.is_flush().is_some());
+        assert!(hand.is_flush(crate::hand::HandRules::DEFAULT).is_some());
     }
 
     #[test]
@@ -1112,22 +1185,22 @@ mod tests {
 
         // Valid 5 (Kh, Kh, Kh, Kh, Kh)
         let hand = SelectHand::new(vec![c1, c2, c3, c4, c5]);
-        let ff = hand.is_flush_five();
+        let ff = hand.is_flush_five(crate::hand::HandRules::DEFAULT);
         assert_eq!(ff.unwrap().len(), 5);
 
         // Invalid 5 (Kh, Kh, Kh, Kh, 2h)
         let hand = SelectHand::new(vec![c1, c2, c3, c4, not1]);
-        let ff = hand.is_flush_five();
+        let ff = hand.is_flush_five(crate::hand::HandRules::DEFAULT);
         assert_eq!(ff, None);
 
         // Invalid 5 (Kh, Kh, Kh, Kh, Kd)
         let hand = SelectHand::new(vec![c1, c2, c3, c4, not2]);
-        let ff = hand.is_flush_five();
+        let ff = hand.is_flush_five(crate::hand::HandRules::DEFAULT);
         assert_eq!(ff, None);
 
         // Invalid 4 (Kh, Kh, Kh, Kh)
         let hand = SelectHand::new(vec![c1, c2, c3, c4]);
-        let ff = hand.is_flush_five();
+        let ff = hand.is_flush_five(crate::hand::HandRules::DEFAULT);
         assert_eq!(ff, None);
     }
 }

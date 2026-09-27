@@ -86,13 +86,13 @@ impl SpectralEffect for Spectral {
                 // TODO: does enhanced mean only enhance, no roll for seal/edition?
                 let card_one = game
                     .backend
-                    .gen_random_card(game.prob_mult, true, Some(&values));
+                    .gen_random_card(game.prob_mult(), true, Some(&values));
                 let card_two = game
                     .backend
-                    .gen_random_card(game.prob_mult, true, Some(&values));
+                    .gen_random_card(game.prob_mult(), true, Some(&values));
                 let card_three = game
                     .backend
-                    .gen_random_card(game.prob_mult, true, Some(&values));
+                    .gen_random_card(game.prob_mult(), true, Some(&values));
                 game.available
                     .extend([card_one, card_two, card_three].to_vec());
             }
@@ -102,10 +102,10 @@ impl SpectralEffect for Spectral {
                 let values: [Value; 1] = [Value::Ace];
                 let card_one = game
                     .backend
-                    .gen_random_card(game.prob_mult, true, Some(&values));
+                    .gen_random_card(game.prob_mult(), true, Some(&values));
                 let card_two = game
                     .backend
-                    .gen_random_card(game.prob_mult, true, Some(&values));
+                    .gen_random_card(game.prob_mult(), true, Some(&values));
                 game.available.extend([card_one, card_two].to_vec());
             }
             Self::Incantation => {
@@ -124,16 +124,16 @@ impl SpectralEffect for Spectral {
                 ];
                 let card_one = game
                     .backend
-                    .gen_random_card(game.prob_mult, true, Some(&values));
+                    .gen_random_card(game.prob_mult(), true, Some(&values));
                 let card_two = game
                     .backend
-                    .gen_random_card(game.prob_mult, true, Some(&values));
+                    .gen_random_card(game.prob_mult(), true, Some(&values));
                 let card_three = game
                     .backend
-                    .gen_random_card(game.prob_mult, true, Some(&values));
+                    .gen_random_card(game.prob_mult(), true, Some(&values));
                 let card_four = game
                     .backend
-                    .gen_random_card(game.prob_mult, true, Some(&values));
+                    .gen_random_card(game.prob_mult(), true, Some(&values));
                 game.available
                     .extend([card_one, card_two, card_three, card_four].to_vec());
             }
@@ -170,7 +170,7 @@ impl SpectralEffect for Spectral {
                 if game.jokers.len() < game.config.joker_slots {
                     let ante = game.ante_current as i32;
                     let exclude = game.jokers.clone();
-                    let prob_mult = game.prob_mult;
+                    let prob_mult = game.prob_mult();
                     let joker =
                         game.backend
                             .gen_joker_of_rarity(ante, prob_mult, &exclude, Rarity::Rare);
@@ -182,7 +182,7 @@ impl SpectralEffect for Spectral {
                 if game.jokers.len() < game.config.joker_slots {
                     let ante = game.ante_current as i32;
                     let exclude = game.jokers.clone();
-                    let prob_mult = game.prob_mult;
+                    let prob_mult = game.prob_mult();
                     let joker = game.backend.gen_joker_of_rarity(
                         ante,
                         prob_mult,

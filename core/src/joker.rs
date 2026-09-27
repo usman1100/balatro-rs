@@ -3,6 +3,7 @@ use crate::effect::{Effects, RuleFlag};
 use crate::game::Game;
 use crate::hand::{MadeHand, SelectHand};
 use crate::rank::HandRank;
+use crate::rng::EffectProc;
 use rand::Rng;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -11,6 +12,50 @@ use strum::IntoEnumIterator;
 pub use balatro_types::joker::*;
 
 static JOKER_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
+
+/// How many jokers have real behavior. Kept in step with
+/// `JokerEffects::is_implemented` by a test.
+#[cfg(test)]
+const IMPLEMENTED_JOKER_COUNT: usize = 148;
+
+/// The real game's own numbers for the jokers below, kept together so a
+/// value from the wiki can be checked against its neighbours at a glance.
+const ICE_CREAM_BASE_CHIPS: usize = 100;
+const ICE_CREAM_DECAY: f32 = 5.0;
+const RUNNER_CHIPS: usize = 15;
+const SQUARE_JOKER_CARDS: usize = 4;
+const SQUARE_JOKER_CHIPS: usize = 4;
+const STUNTMAN_CHIPS: usize = 250;
+const HIKER_CHIPS: usize = 5;
+const GROS_MICHEL_MULT: usize = 15;
+const GROS_MICHEL_ODDS: u32 = 6;
+const CAVENDISH_ODDS: u32 = 1000;
+const BOOTSTRAPS_PER_DOLLAR: usize = 5;
+const CONSTELLATION_STEP: f32 = 0.1;
+const LOYALTY_HANDS_PER_MULT: usize = 6;
+const LOYALTY_MULT_EVERY: u32 = 4;
+const POPCORN_BASE_MULT: usize = 20;
+const POPCORN_DECAY: f32 = 4.0;
+const RAMEN_BASE_MULT: f32 = 2.0;
+const RAMEN_DECAY: f32 = 0.01;
+const CAMPFIRE_STEP: f32 = 0.25;
+const GLASS_JOKER_STEP: f32 = 0.75;
+const LUCKY_CAT_STEP: f32 = 0.25;
+const HOLOGRAM_STEP: f32 = 0.25;
+const VAMPIRE_STEP: f32 = 0.1;
+const GOLDEN_JOKER_DOLLARS: usize = 4;
+const EGG_SELL_BONUS: usize = 3;
+const GIFT_CARD_SELL_BONUS: usize = 1;
+const ROCKET_DOLLARS: usize = 1;
+const DELAYED_GRATIFICATION_DOLLARS: usize = 2;
+const RED_CARD_MULT: usize = 3;
+const THROWBACK_STEP: f32 = 0.25;
+const ANCIENT_JOKER_STEP: f32 = 1.5;
+const THE_IDOL_MULT: f32 = 2.0;
+const TODO_LIST_DOLLARS: usize = 4;
+const TRIBOULET_MULT: f32 = 2.0;
+const CANIO_STEP: f32 = 1.0;
+const VAGABOND_MONEY: usize = 4;
 
 pub(crate) fn mint_joker_id() -> usize {
     JOKER_ID_COUNTER.fetch_add(1, Ordering::SeqCst)
@@ -21,6 +66,12 @@ pub(crate) fn ensure_joker_id_counter_past(max_seen: usize) {
 }
 
 /// Assigns a fresh rotating selector to joker if it's a selector-type joker.
+/// A copy-source joker can never be another one, which is what keeps
+/// Blueprint and Brainstorm from resolving each other in a circle.
+fn is_self_referential(joker: &Jokers) -> bool {
+    matches!(joker, Jokers::Blueprint(_) | Jokers::Brainstorm(_))
+}
+
 pub(crate) fn roll_discard_selector<R: Rng + ?Sized>(rng: &mut R, j: &mut Jokers) {
     const SUITS: [Suit; 4] = [Suit::Spade, Suit::Club, Suit::Heart, Suit::Diamond];
     const VALUES: [Value; 13] = [
@@ -46,6 +97,37 @@ pub(crate) fn roll_discard_selector<R: Rng + ?Sized>(rng: &mut R, j: &mut Jokers
         Jokers::MailInRebate(_) => {
             let value = VALUES[rng.gen_range(0..VALUES.len())];
             j.state_mut().selector = Some(SelectorValue::Value(value));
+        }
+        // Both rotate at the end of a round, re-rolled like the others.
+        Jokers::AncientJoker(_) => {
+            let suit = SUITS[rng.gen_range(0..SUITS.len())];
+            j.state_mut().selector = Some(SelectorValue::Suit(suit));
+        }
+        Jokers::TheIdol(_) => {
+            let value = VALUES[rng.gen_range(0..VALUES.len())];
+            let suit = SUITS[rng.gen_range(0..SUITS.len())];
+            let state = j.state_mut();
+            state.selector = Some(SelectorValue::Value(value));
+            state.selector2 = Some(SelectorValue::Suit(suit));
+        }
+        Jokers::ToDoList(_) => {
+            const HANDS: [HandRank; 13] = [
+                HandRank::HighCard,
+                HandRank::OnePair,
+                HandRank::TwoPair,
+                HandRank::ThreeOfAKind,
+                HandRank::Straight,
+                HandRank::Flush,
+                HandRank::FullHouse,
+                HandRank::FourOfAKind,
+                HandRank::StraightFlush,
+                HandRank::RoyalFlush,
+                HandRank::FiveOfAKind,
+                HandRank::FlushHouse,
+                HandRank::FlushFive,
+            ];
+            let hand = HANDS[rng.gen_range(0..HANDS.len())];
+            j.state_mut().selector = Some(SelectorValue::Hand(hand));
         }
         _ => {}
     }
@@ -142,7 +224,7 @@ impl JokerEffects for Jokers {
             }
             Self::CrazyJoker(_) => {
                 fn apply(g: &mut Game, hand: MadeHand) {
-                    if hand.hand.is_straight().is_some() {
+                    if hand.hand.is_straight(crate::hand::HandRules::DEFAULT).is_some() {
                         g.mult += 12
                     }
                 }
@@ -150,7 +232,7 @@ impl JokerEffects for Jokers {
             }
             Self::DrollJoker(_) => {
                 fn apply(g: &mut Game, hand: MadeHand) {
-                    if hand.hand.is_flush().is_some() {
+                    if hand.hand.is_flush(crate::hand::HandRules::DEFAULT).is_some() {
                         g.mult += 10
                     }
                 }
@@ -182,7 +264,7 @@ impl JokerEffects for Jokers {
             }
             Self::DeviousJoker(_) => {
                 fn apply(g: &mut Game, hand: MadeHand) {
-                    if hand.hand.is_straight().is_some() {
+                    if hand.hand.is_straight(crate::hand::HandRules::DEFAULT).is_some() {
                         g.chips += 100
                     }
                 }
@@ -190,7 +272,7 @@ impl JokerEffects for Jokers {
             }
             Self::CraftyJoker(_) => {
                 fn apply(g: &mut Game, hand: MadeHand) {
-                    if hand.hand.is_flush().is_some() {
+                    if hand.hand.is_flush(crate::hand::HandRules::DEFAULT).is_some() {
                         g.chips += 80
                     }
                 }
@@ -379,7 +461,7 @@ impl JokerEffects for Jokers {
             Self::BusinessCard(_) => {
                 fn apply(g: &mut Game, _hand: MadeHand) {
                     for card in g.non_debuffed(_hand.hand.cards().iter()) {
-                        if g.is_face_card(&card) && g.prob_roll(1, 2) {
+                        if g.is_face_card(&card) && g.prob_roll(EffectProc::BusinessCard, 1, 2) {
                             g.money += 2;
                         }
                     }
@@ -441,7 +523,7 @@ impl JokerEffects for Jokers {
             Self::ReservedParking(_) => {
                 fn apply(g: &mut Game, _hand: MadeHand) {
                     for card in g.non_debuffed(g.available.not_selected().iter()) {
-                        if g.is_face_card(&card) && g.prob_roll(1, 2) {
+                        if g.is_face_card(&card) && g.prob_roll(EffectProc::ReservedParking, 1, 2) {
                             g.money += 1;
                         }
                     }
@@ -519,7 +601,7 @@ impl JokerEffects for Jokers {
             Self::Bloodstone(_) => {
                 fn apply(g: &mut Game, _hand: MadeHand) {
                     for card in g.non_debuffed(_hand.hand.cards().iter()) {
-                        if card.matches_suit(Suit::Heart) && g.prob_roll(1, 2) {
+                        if card.matches_suit(Suit::Heart) && g.prob_roll(EffectProc::Bloodstone, 1, 2) {
                             g.mult += g.mult / 2;
                         }
                     }
@@ -594,7 +676,7 @@ impl JokerEffects for Jokers {
             }
             Self::TheOrder(_) => {
                 fn apply(g: &mut Game, hand: MadeHand) {
-                    if hand.hand.is_straight().is_some() {
+                    if hand.hand.is_straight(crate::hand::HandRules::DEFAULT).is_some() {
                         g.mult *= 3;
                     }
                 }
@@ -602,7 +684,7 @@ impl JokerEffects for Jokers {
             }
             Self::TheTribe(_) => {
                 fn apply(g: &mut Game, hand: MadeHand) {
-                    if hand.hand.is_flush().is_some() {
+                    if hand.hand.is_flush(crate::hand::HandRules::DEFAULT).is_some() {
                         g.mult *= 2;
                     }
                 }
@@ -787,7 +869,7 @@ impl JokerEffects for Jokers {
             }
             Self::Luchador(_) => {
                 fn apply(g: &mut Game) {
-                    g.boss_disabled_by_luchador = true;
+                    g.boss_disabled = true;
                 }
                 vec![Effects::OnSell(Arc::new(Mutex::new(apply)))]
             }
@@ -799,6 +881,597 @@ impl JokerEffects for Jokers {
                 }
                 vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
             }
+            Self::IceCream(_) => {
+                fn apply(g: &mut Game, _hand: MadeHand) {
+                    let hands = g.hands_played_this_run as f32;
+                    let base = (ICE_CREAM_BASE_CHIPS as f32 - ICE_CREAM_DECAY * hands).max(0.0);
+                    g.chips += base as usize;
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Runner(_) => {
+                fn apply(g: &mut Game, hand: MadeHand) {
+                    if matches!(
+                        hand.rank,
+                        HandRank::Straight | HandRank::StraightFlush | HandRank::RoyalFlush
+                    ) {
+                        g.chips += RUNNER_CHIPS;
+                    }
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::SquareJoker(_) => {
+                fn apply(g: &mut Game, hand: MadeHand) {
+                    if hand.all.len() == SQUARE_JOKER_CARDS {
+                        g.chips += SQUARE_JOKER_CHIPS;
+                    }
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Stuntman(_) => {
+                fn apply(g: &mut Game, _hand: MadeHand) {
+                    g.chips += STUNTMAN_CHIPS;
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Blackboard(_) => {
+                fn apply(g: &mut Game, _hand: MadeHand) {
+                    let held = g.available.not_selected();
+                    if !held.is_empty()
+                        && held
+                            .iter()
+                            .all(|c| c.matches_suit(Suit::Spade) || c.matches_suit(Suit::Club))
+                    {
+                        g.mult *= 3;
+                    }
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::FlowerPot(_) => {
+                fn apply(g: &mut Game, hand: MadeHand) {
+                    let played = g.non_debuffed(hand.hand.cards().iter());
+                    if [Suit::Diamond, Suit::Club, Suit::Heart, Suit::Spade]
+                        .into_iter()
+                        .all(|s| played.iter().any(|c| c.matches_suit(s)))
+                    {
+                        g.mult *= 3;
+                    }
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::SeeingDouble(_) => {
+                fn apply(g: &mut Game, hand: MadeHand) {
+                    let played = g.non_debuffed(hand.hand.cards().iter());
+                    let clubs = played.iter().filter(|c| c.matches_suit(Suit::Club)).count();
+                    let others = played.iter().filter(|c| !c.matches_suit(Suit::Club)).count();
+                    if clubs > 0 && others > 0 {
+                        g.mult *= 2;
+                    }
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Swashbuckler(swash) => {
+                let id = swash.instance_id;
+                let apply = move |g: &mut Game, _hand: MadeHand| {
+                    let others: usize = g
+                        .jokers
+                        .iter()
+                        .filter(|j| j.instance_id() != id)
+                        .map(|j| j.sell_value())
+                        .sum();
+                    g.mult += others;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Bootstraps(_) => {
+                fn apply(g: &mut Game, _hand: MadeHand) {
+                    g.mult += 2 * (g.money / BOOTSTRAPS_PER_DOLLAR);
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Misprint(_) => {
+                fn apply(g: &mut Game, _hand: MadeHand) {
+                    g.mult += g.misprint_roll() as usize;
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Hiker(_) => {
+                // Permanent and per card, so it lands on the card rather
+                // than on this scoring pass.
+                fn apply(g: &mut Game, hand: MadeHand) {
+                    for card in g.non_debuffed(hand.hand.cards().iter()) {
+                        g.deck
+                            .mutate_card(card.id, |c| c.bonus_chips += HIKER_CHIPS);
+                    }
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::GrosMichel(g) => {
+                let id = g.instance_id;
+                fn score(g: &mut Game, _hand: MadeHand) {
+                    g.mult += GROS_MICHEL_MULT;
+                }
+                let extinct = move |g: &mut Game| {
+                    if g.prob_roll(EffectProc::GrosMichelExtinct, 1, GROS_MICHEL_ODDS) {
+                        g.destroy_joker(id);
+                    }
+                };
+                vec![
+                    Effects::OnScore(Arc::new(Mutex::new(score))),
+                    Effects::OnRoundEnd(Arc::new(Mutex::new(extinct))),
+                ]
+            }
+            Self::Cavendish(c) => {
+                let id = c.instance_id;
+                fn score(g: &mut Game, _hand: MadeHand) {
+                    g.mult *= 3;
+                }
+                let extinct = move |g: &mut Game| {
+                    if g.prob_roll(EffectProc::CavendishExtinct, 1, CAVENDISH_ODDS) {
+                        g.destroy_joker(id);
+                    }
+                };
+                vec![
+                    Effects::OnScore(Arc::new(Mutex::new(score))),
+                    Effects::OnRoundEnd(Arc::new(Mutex::new(extinct))),
+                ]
+            }
+            Self::Constellation(c) => {
+                let id = c.instance_id;
+                let apply = move |g: &mut Game, _hand: MadeHand| {
+                    let x = 1.0 + g.planets_used_this_run as f32 * CONSTELLATION_STEP;
+                    if let Some(state) = g.joker_state_mut(id) {
+                        state.counter = x;
+                    }
+                    g.mult = (g.mult as f32 * x) as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::LoyaltyCard(l) => {
+                let id = l.instance_id;
+                let apply = move |g: &mut Game, _hand: MadeHand| {
+                    // X4 every 6 hands, so the multipliers compound.
+                    let chunks = (g.hands_played_this_run / LOYALTY_HANDS_PER_MULT) as u32;
+                    let x = LOYALTY_MULT_EVERY.pow(chunks);
+                    if let Some(state) = g.joker_state_mut(id) {
+                        state.counter = x as f32;
+                    }
+                    g.mult = (g.mult as u32 * x) as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Popcorn(p) => {
+                let id = p.instance_id;
+                let apply = move |g: &mut Game, _hand: MadeHand| {
+                    let mult = (POPCORN_BASE_MULT as f32 - POPCORN_DECAY * g.rounds_played as f32)
+                        .max(0.0);
+                    if let Some(state) = g.joker_state_mut(id) {
+                        state.counter = mult;
+                    }
+                    g.mult += mult as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Ramen(r) => {
+                let id = r.instance_id;
+                let apply = move |g: &mut Game, _hand: MadeHand| {
+                    let x =
+                        (RAMEN_BASE_MULT - RAMEN_DECAY * g.total_cards_discarded as f32).max(1.0);
+                    if let Some(state) = g.joker_state_mut(id) {
+                        state.counter = x;
+                    }
+                    g.mult = (g.mult as f32 * x) as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Campfire(camp) => {
+                let id = camp.instance_id;
+                let apply = move |g: &mut Game, _hand: MadeHand| {
+                    let x = 1.0 + g.campfire_sold as f32 * CAMPFIRE_STEP;
+                    if let Some(state) = g.joker_state_mut(id) {
+                        state.counter = x;
+                    }
+                    g.mult = (g.mult as f32 * x) as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::GlassJoker(glass) => {
+                let id = glass.instance_id;
+                let apply = move |g: &mut Game, _hand: MadeHand| {
+                    let x = 1.0 + g.glass_cards_destroyed as f32 * GLASS_JOKER_STEP;
+                    if let Some(state) = g.joker_state_mut(id) {
+                        state.counter = x;
+                    }
+                    g.mult = (g.mult as f32 * x) as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::LuckyCat(l) => {
+                let id = l.instance_id;
+                let apply = move |g: &mut Game, _hand: MadeHand| {
+                    let x = 1.0 + g.lucky_triggers as f32 * LUCKY_CAT_STEP;
+                    if let Some(state) = g.joker_state_mut(id) {
+                        state.counter = x;
+                    }
+                    g.mult = (g.mult as f32 * x) as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Hologram(h) => {
+                let id = h.instance_id;
+                let apply = move |g: &mut Game, _hand: MadeHand| {
+                    // Only fires in an ante it was bought in.
+                    if !g.hologram_active() {
+                        return;
+                    }
+                    let x = 1.0 + g.cards_added_this_ante as f32 * HOLOGRAM_STEP;
+                    if let Some(state) = g.joker_state_mut(id) {
+                        state.counter = x;
+                    }
+                    g.mult = (g.mult as f32 * x) as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Vampire(v) => {
+                let id = v.instance_id;
+                let apply = move |g: &mut Game, hand: MadeHand| {
+                    let played = g.non_debuffed(hand.hand.cards().iter());
+                    let enhanced = played.iter().filter(|c| c.enhancement.is_some()).count();
+                    if enhanced == 0 {
+                        return;
+                    }
+                    let x = 1.0 + enhanced as f32 * VAMPIRE_STEP;
+                    if let Some(state) = g.joker_state_mut(id) {
+                        state.counter = x;
+                    }
+                    for card in played {
+                        if card.enhancement.is_some() {
+                            g.deck.mutate_card(card.id, |c| c.enhancement = None);
+                        }
+                    }
+                    g.mult = (g.mult as f32 * x) as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            // End of blind.
+            Self::GoldenJoker(_) => {
+                fn apply(g: &mut Game) {
+                    g.money += GOLDEN_JOKER_DOLLARS;
+                }
+                vec![Effects::OnRoundEnd(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Egg(egg) => {
+                let id = egg.instance_id;
+                let apply = move |g: &mut Game| {
+                    if let Some(j) = g.jokers.iter_mut().find(|j| j.instance_id() == id) {
+                        j.add_sell_bonus(EGG_SELL_BONUS);
+                    }
+                };
+                vec![Effects::OnRoundEnd(Arc::new(Mutex::new(apply)))]
+            }
+            Self::GiftCard(_) => {
+                fn apply(g: &mut Game) {
+                    for joker in g.jokers.iter_mut() {
+                        joker.add_sell_bonus(GIFT_CARD_SELL_BONUS);
+                    }
+                }
+                vec![Effects::OnRoundEnd(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Rocket(_) => {
+                fn apply(g: &mut Game) {
+                    g.money += ROCKET_DOLLARS;
+                }
+                vec![Effects::OnRoundEnd(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Cloud9(_) => {
+                fn apply(g: &mut Game) {
+                    let nines = g
+                        .deck
+                        .cards()
+                        .iter()
+                        .chain(g.available.cards().iter())
+                        .chain(g.discarded.iter())
+                        .filter(|c| c.value == Value::Nine)
+                        .count();
+                    g.money += nines;
+                }
+                vec![Effects::OnRoundEnd(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Satellite(_) => {
+                fn apply(g: &mut Game) {
+                    // One dollar per distinct planet used, not per use.
+                    g.money += g.distinct_planets_used();
+                }
+                vec![Effects::OnRoundEnd(Arc::new(Mutex::new(apply)))]
+            }
+            Self::DelayedGratification(_) => {
+                fn apply(g: &mut Game) {
+                    if g.discarded_this_round.is_empty() {
+                        g.money += DELAYED_GRATIFICATION_DOLLARS * g.plays;
+                    }
+                }
+                vec![Effects::OnRoundEnd(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Madness(m) => {
+                // Its blind-start half lives in `joker_blind_start`; this is
+                // the accumulated X0.5 Mult.
+                let id = m.instance_id;
+                let apply = move |g: &mut Game, _hand: MadeHand| {
+                    let x = 1.0
+                        + g.joker_state(id).map(|s| s.counter).unwrap_or(0.0);
+                    g.mult = (g.mult as f32 * x) as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::RedCard(_) => {
+                fn apply(g: &mut Game, _hand: MadeHand) {
+                    g.mult += RED_CARD_MULT;
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::FlashCard(f) => {
+                let id = f.instance_id;
+                let apply = move |g: &mut Game, _hand: MadeHand| {
+                    let bonus = 2 * g.rerolls_this_shop;
+                    if let Some(state) = g.joker_state_mut(id) {
+                        state.counter = bonus as f32;
+                    }
+                    g.mult += bonus;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Seltzer(s) => {
+                let id = s.instance_id;
+                let extra = move |g: &mut Game, _card: Card, _is_first: bool| {
+                    let hands_left = g.joker_state(id).map(|s| s.counter).unwrap_or(0.0);
+                    usize::from(hands_left > 0.0)
+                };
+                vec![Effects::TriggerCountPlayed(Arc::new(Mutex::new(extra)))]
+            }
+            Self::Throwback(t) => {
+                let id = t.instance_id;
+                let apply = move |g: &mut Game, _hand: MadeHand| {
+                    let x = 1.0 + g.blinds_skipped_this_run as f32 * THROWBACK_STEP;
+                    if let Some(state) = g.joker_state_mut(id) {
+                        state.counter = x;
+                    }
+                    g.mult = (g.mult as f32 * x) as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::AncientJoker(a) => {
+                let id = a.instance_id;
+                let apply = move |g: &mut Game, hand: MadeHand| {
+                    let Some(SelectorValue::Suit(suit)) = g.joker_state(id).and_then(|s| s.selector)
+                    else {
+                        return;
+                    };
+                    let n = g
+                        .non_debuffed(hand.hand.cards().iter())
+                        .iter()
+                        .filter(|c| c.matches_suit(suit))
+                        .count();
+                    let x = (ANCIENT_JOKER_STEP).powf(n as f32);
+                    if let Some(state) = g.joker_state_mut(id) {
+                        state.counter = x;
+                    }
+                    g.mult = (g.mult as f32 * x) as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::TheIdol(idol) => {
+                let id = idol.instance_id;
+                let apply = move |g: &mut Game, hand: MadeHand| {
+                    let Some(state) = g.joker_state(id) else {
+                        return;
+                    };
+                    // A specific card: a rank (selector) and a suit
+                    // (selector2), both rerolled each round.
+                    let (Some(SelectorValue::Value(value)), Some(SelectorValue::Suit(suit))) =
+                        (state.selector, state.selector2)
+                    else {
+                        return;
+                    };
+                    let hits = g
+                        .non_debuffed(hand.hand.cards().iter())
+                        .iter()
+                        .filter(|c| c.value == value && c.matches_suit(suit))
+                        .count();
+                    g.mult = (g.mult as f32 * THE_IDOL_MULT.powi(hits as i32)) as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::ToDoList(list) => {
+                let id = list.instance_id;
+                let apply = move |g: &mut Game, hand: MadeHand| {
+                    if g.joker_state(id).and_then(|s| s.selector)
+                        == Some(SelectorValue::Hand(hand.rank))
+                    {
+                        g.money += TODO_LIST_DOLLARS;
+                    }
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Triboulet(_) => {
+                fn apply(g: &mut Game, hand: MadeHand) {
+                    let royalty = g
+                        .non_debuffed(hand.hand.cards().iter())
+                        .iter()
+                        .filter(|c| matches!(c.value, Value::King | Value::Queen))
+                        .count();
+                    g.mult = (g.mult as f32 * TRIBOULET_MULT.powi(royalty as i32)) as usize;
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::FortuneTeller(_) => {
+                fn apply(g: &mut Game, _hand: MadeHand) {
+                    g.mult += g.tarots_used_this_run;
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::ToTheMoon(_) => {
+                // Paid through `joker_interest_bonus` at cash out.
+                vec![]
+            }
+            Self::ChaosTheClown(_) => {
+                // Free rerolls are granted and taken back by
+                // `Game::joker_blind_start` / `handle_round_end`.
+                vec![]
+            }
+            Self::Canio(canio) => {
+                let id = canio.instance_id;
+                let apply = move |g: &mut Game, _hand: MadeHand| {
+                    let x = 1.0 + g.face_cards_destroyed as f32 * CANIO_STEP;
+                    if let Some(state) = g.joker_state_mut(id) {
+                        state.counter = x;
+                    }
+                    g.mult = (g.mult as f32 * x) as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::SpaceJoker(_) => {
+                fn apply(g: &mut Game, hand: MadeHand) {
+                    if g.prob_roll(EffectProc::SpaceJoker, 1, 4) {
+                        g.planetarium.level_up(hand.rank);
+                    }
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::EightBall(_) => {
+                fn apply(g: &mut Game, hand: MadeHand) {
+                    let eights = g
+                        .non_debuffed(hand.hand.cards().iter())
+                        .iter()
+                        .filter(|c| c.value == Value::Eight)
+                        .count();
+                    for _ in 0..eights {
+                        if g.prob_roll(EffectProc::EightBall, 1, 4) {
+                            g.add_tarot();
+                        }
+                    }
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Seance(_) => {
+                fn apply(g: &mut Game, hand: MadeHand) {
+                    if matches!(
+                        hand.rank,
+                        HandRank::StraightFlush | HandRank::RoyalFlush
+                    ) {
+                        g.add_spectral();
+                    }
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Superposition(_) => {
+                fn apply(g: &mut Game, hand: MadeHand) {
+                    let played = g.non_debuffed(hand.hand.cards().iter());
+                    let has_ace = played.iter().any(|c| c.value == Value::Ace);
+                    let straight = matches!(
+                        hand.rank,
+                        HandRank::Straight | HandRank::StraightFlush | HandRank::RoyalFlush
+                    );
+                    if has_ace && straight {
+                        g.add_tarot();
+                    }
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Vagabond(_) => {
+                fn apply(g: &mut Game, _hand: MadeHand) {
+                    if g.money <= VAGABOND_MONEY {
+                        g.add_tarot();
+                    }
+                }
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::Splash(_) => {
+                // Every selected card scores, not just the ones that made
+                // the hand.
+                vec![Effects::RuleFlag(RuleFlag::AllPlayedCardsScore)]
+            }
+            Self::FourFingers(_) => vec![Effects::RuleFlag(RuleFlag::FourCardsMakeStraightsAndFlushes)],
+            Self::SmearedJoker(_) => vec![Effects::RuleFlag(RuleFlag::SmearedSuits)],
+            Self::Shortcut(_) => vec![Effects::RuleFlag(RuleFlag::GappyStraights)],
+            Self::CeremonialDagger(d) => {
+                // The destroyed Joker's value is banked as permanent Mult on
+                // the Dagger itself, so it lives on its own instance.
+                let id = d.instance_id;
+                let apply = move |g: &mut Game, _hand: MadeHand| {
+                    let banked = g.joker_state(id).map(|s| s.counter).unwrap_or(0.0);
+                    g.mult = (g.mult as f32 * (1.0 + banked)) as usize;
+                };
+                vec![Effects::OnScore(Arc::new(Mutex::new(apply)))]
+            }
+            Self::DietCola(_) => {
+                // Its whole effect is in `Game::sell_joker`.
+                vec![Effects::OnSell(Arc::new(Mutex::new(|g: &mut Game| {
+                    g.grant_free_double_tag();
+                })))]
+            }
+            Self::InvisibleJoker(_) => {
+                // Only acts on sale, in `Game::sell_joker`.
+                vec![]
+            }
+            Self::Blueprint(b) => {
+                // Copies whatever is to the right. Never another Blueprint
+                // or Brainstorm, matching the real game, so the resolution
+                // is one level deep and can't recurse.
+                let id = b.instance_id;
+                #[allow(clippy::needless_return)]
+                return match game.joker_to_the_right(id) {
+                    Some(source) if !is_self_referential(&source) => source.effects(game),
+                    _ => vec![],
+                };
+            }
+            Self::Brainstorm(b) => {
+                // Same, but the leftmost Joker, and a Brainstorm sitting
+                // leftmost is inert.
+                let id = b.instance_id;
+                #[allow(clippy::needless_return)]
+                return match game.leftmost_joker() {
+                    Some(source) if source.instance_id() != id && !is_self_referential(&source) => {
+                        source.effects(game)
+                    }
+                    _ => vec![],
+                };
+            }
+            Self::Dna(_) => {
+                // First hand of the round, single card, in
+                // `Game::joker_round_start`.
+                vec![]
+            }
+            Self::SixthSense(_) => vec![],
+            Self::Hallucination(_) => {
+                // Fires in `Game::joker_pack_opened`.
+                vec![]
+            }
+            Self::Showman(_) => {
+                // Read by the RNG backend's lock table, not a hook.
+                vec![]
+            }
+            Self::MrBones(_) => {
+                // Save-or-self-destruct runs in `Game::handle_score`, where
+                // losing is actually decided.
+                vec![]
+            }
+            // The blind-start group is driven by `Game::joker_blind_start`,
+            // which runs before the deal, so these have no scoring hook.
+            Self::RiffRaff(_)
+            | Self::Cartomancer(_)
+            | Self::Burglar(_)
+            | Self::MarbleJoker(_)
+            | Self::Certificate(_)
+            | Self::BurntJoker(_) => vec![],
+            // These change a derived limit or a price rather than
+            // contributing to a score, so they have no hook at all.
+            Self::Juggler(_)
+            | Self::Drunkard(_)
+            | Self::MerryAndy(_)
+            | Self::Troubadour(_)
+            | Self::TurtleBean(_)
+            | Self::OopsAllSixes(_)
+            | Self::Astronomer(_) => vec![],
             _ => vec![],
         }
     }
@@ -880,6 +1553,80 @@ impl JokerEffects for Jokers {
                 | Self::Luchador(_)
                 | Self::Chicot(_)
                 | Self::Matador(_)
+                | Self::IceCream(_)
+                | Self::Runner(_)
+                | Self::SquareJoker(_)
+                | Self::Stuntman(_)
+                | Self::Blackboard(_)
+                | Self::FlowerPot(_)
+                | Self::SeeingDouble(_)
+                | Self::Swashbuckler(_)
+                | Self::Bootstraps(_)
+                | Self::Misprint(_)
+                | Self::Hiker(_)
+                | Self::GrosMichel(_)
+                | Self::Cavendish(_)
+                | Self::Constellation(_)
+                | Self::LoyaltyCard(_)
+                | Self::Popcorn(_)
+                | Self::Ramen(_)
+                | Self::Campfire(_)
+                | Self::GlassJoker(_)
+                | Self::LuckyCat(_)
+                | Self::Hologram(_)
+                | Self::Vampire(_)
+                | Self::Juggler(_)
+                | Self::Drunkard(_)
+                | Self::MerryAndy(_)
+                | Self::Troubadour(_)
+                | Self::TurtleBean(_)
+                | Self::OopsAllSixes(_)
+                | Self::Astronomer(_)
+                | Self::GoldenJoker(_)
+                | Self::Egg(_)
+                | Self::GiftCard(_)
+                | Self::Rocket(_)
+                | Self::Cloud9(_)
+                | Self::Satellite(_)
+                | Self::DelayedGratification(_)
+                | Self::RiffRaff(_)
+                | Self::Cartomancer(_)
+                | Self::Burglar(_)
+                | Self::MarbleJoker(_)
+                | Self::Certificate(_)
+                | Self::BurntJoker(_)
+                | Self::Madness(_)
+                | Self::RedCard(_)
+                | Self::FlashCard(_)
+                | Self::Seltzer(_)
+                | Self::Throwback(_)
+                | Self::AncientJoker(_)
+                | Self::TheIdol(_)
+                | Self::ToDoList(_)
+                | Self::Triboulet(_)
+                | Self::FortuneTeller(_)
+                | Self::ToTheMoon(_)
+                | Self::ChaosTheClown(_)
+                | Self::Canio(_)
+                | Self::SpaceJoker(_)
+                | Self::EightBall(_)
+                | Self::Seance(_)
+                | Self::Superposition(_)
+                | Self::Vagabond(_)
+                | Self::Splash(_)
+                | Self::FourFingers(_)
+                | Self::SmearedJoker(_)
+                | Self::Shortcut(_)
+                | Self::CeremonialDagger(_)
+                | Self::DietCola(_)
+                | Self::InvisibleJoker(_)
+                | Self::Dna(_)
+                | Self::SixthSense(_)
+                | Self::Hallucination(_)
+                | Self::Showman(_)
+                | Self::MrBones(_)
+                | Self::Blueprint(_)
+                | Self::Brainstorm(_)
         )
     }
 }
@@ -938,14 +1685,363 @@ mod tests {
     use balatro_types::BossBlind;
 
     use super::*;
+    use crate::config::Config;
+
+    /// Scores a hand with `joker` held, and nothing else, and reports the
+    /// chips the joker contributed. `calc_score` resets chips and mult at
+    /// the end, so the deltas come off the trace rather than off `Game`.
+    fn score_with(joker: Jokers, cards: &[(Value, Suit)]) -> (i64, usize) {
+        scored_with(Some(joker), cards)
+    }
+
+    fn base_score(cards: &[(Value, Suit)]) -> (i64, usize) {
+        scored_with(None, cards)
+    }
+
+    fn scored_with(joker: Option<Jokers>, cards: &[(Value, Suit)]) -> (i64, usize) {
+        let mut g = Game::new(Config {
+            seed: Some(1),
+            ..Config::default()
+        });
+        g.start();
+        g.blind = Some(Blind::Small);
+        g.stage = Stage::Blind(Blind::Small);
+        g.jokers = joker.into_iter().collect();
+        g.available
+            .extend(cards.iter().map(|(v, s)| Card::new(*v, *s)).collect());
+        let hand = SelectHand::new(g.available.cards())
+            .best_hand()
+            .expect("hand");
+        let (score, trace) = g.calc_score_traced(hand);
+        let chips = trace
+            .0
+            .iter()
+            .filter(|step| matches!(step.source, crate::score::ScoreSource::Joker(_)))
+            .map(|step| step.delta_chips())
+            .sum();
+        (chips, score)
+    }
+
+    const HIGH: [(Value, Suit); 5] = [
+        (Value::Two, Suit::Heart),
+        (Value::Five, Suit::Club),
+        (Value::Seven, Suit::Spade),
+        (Value::Nine, Suit::Diamond),
+        (Value::Jack, Suit::Heart),
+    ];
+    /// A straight in mixed suits, so it is a Straight and not a Straight
+    /// Flush.
+    const RUN: [(Value, Suit); 5] = [
+        (Value::Five, Suit::Heart),
+        (Value::Six, Suit::Club),
+        (Value::Seven, Suit::Spade),
+        (Value::Eight, Suit::Diamond),
+        (Value::Nine, Suit::Heart),
+    ];
+
+    #[test]
+    fn test_runner_only_fires_on_a_straight() {
+        let (chips, _) = score_with(Jokers::Runner(Default::default()), &RUN);
+        assert_eq!(chips, 15, "+15 chips on a straight");
+
+        let (chips, _) = score_with(Jokers::Runner(Default::default()), &HIGH);
+        assert_eq!(chips, 0, "no effect off a straight");
+    }
+
+    #[test]
+    fn test_stuntman_always_adds_chips() {
+        let (chips, _) = score_with(Jokers::Stuntman(Default::default()), &HIGH);
+        assert_eq!(chips, 250);
+    }
+
+    #[test]
+    fn test_square_joker_needs_exactly_four_cards() {
+        let four: [(Value, Suit); 4] = [
+            (Value::Two, Suit::Heart),
+            (Value::Two, Suit::Club),
+            (Value::Five, Suit::Spade),
+            (Value::Nine, Suit::Heart),
+        ];
+        let (chips, _) = score_with(Jokers::SquareJoker(Default::default()), &four);
+        assert_eq!(chips, 4);
+        let (chips, _) = score_with(Jokers::SquareJoker(Default::default()), &HIGH);
+        assert_eq!(chips, 0, "five cards is not four");
+    }
+
+    #[test]
+    fn test_blackboard_needs_every_held_card_in_spades_or_clubs() {
+        let spades: Vec<(Value, Suit)> = HIGH.iter().map(|(v, _)| (*v, Suit::Spade)).collect();
+        let (_, score) = score_with(Jokers::Blackboard(Default::default()), &spades);
+        let (_, base) = base_score(&spades);
+        assert_eq!(score, base * 3, "X3 Mult");
+    }
+
+    #[test]
+    fn test_blackboard_is_off_when_nothing_is_held() {
+        let (_, score) = score_with(Jokers::Blackboard(Default::default()), &HIGH);
+        let (_, base) = base_score(&HIGH);
+        assert_eq!(score, base, "every card was selected, so none is held");
+    }
+
+    #[test]
+    fn test_bootstraps_scales_with_money() {
+        let mut g = Game::new(Config {
+            seed: Some(1),
+            ..Config::default()
+        });
+        g.start();
+        g.blind = Some(Blind::Small);
+        g.stage = Stage::Blind(Blind::Small);
+        g.jokers = vec![Jokers::Bootstraps(Default::default())];
+        g.money = 50;
+        g.available
+            .extend(HIGH.iter().map(|(v, s)| Card::new(*v, *s)).collect());
+        let hand = SelectHand::new(g.available.cards()).best_hand().unwrap();
+        let with_boots = g.calc_score(hand);
+
+        g.jokers.clear();
+        g.money = 0;
+        let hand = SelectHand::new(g.available.cards()).best_hand().unwrap();
+        let without = g.calc_score(hand);
+        assert!(
+            with_boots > without,
+            "+2 mult per $5, so $50 is +20 mult"
+        );
+    }
+
+    #[test]
+    fn test_swashbuckler_adds_other_jokers_sell_values() {
+        let mut g = Game::new(Config {
+            seed: Some(1),
+            ..Config::default()
+        });
+        g.start();
+        g.blind = Some(Blind::Small);
+        g.stage = Stage::Blind(Blind::Small);
+        let mut swash = Jokers::Swashbuckler(Default::default());
+        swash.set_instance_id(1);
+        let mut other = Jokers::TheJoker(Default::default());
+        other.set_instance_id(2);
+        g.jokers = vec![swash, other];
+        g.available
+            .extend(HIGH.iter().map(|(v, s)| Card::new(*v, *s)).collect());
+        let hand = SelectHand::new(g.available.cards()).best_hand().unwrap();
+        let with_two = g.calc_score(hand);
+
+        g.jokers.truncate(1);
+        let hand = SelectHand::new(g.available.cards()).best_hand().unwrap();
+        let with_one = g.calc_score(hand);
+        assert!(
+            with_two > with_one,
+            "the second Joker's sell value should add Mult"
+        );
+    }
+
+    #[test]
+    fn test_four_fingers_makes_a_straight_from_four_cards() {
+        let four = [
+            (Value::Five, Suit::Heart),
+            (Value::Six, Suit::Club),
+            (Value::Seven, Suit::Spade),
+            (Value::Eight, Suit::Diamond),
+        ];
+        let hand = SelectHand::new(
+            four
+                .iter()
+                .map(|(v, s)| Card::new(*v, *s))
+                .collect::<Vec<_>>(),
+        );
+        assert_ne!(
+            hand.best_hand().expect("four cards").rank,
+            crate::rank::HandRank::Straight,
+            "four cards alone cannot make a straight"
+        );
+        let rules = crate::hand::HandRules {
+            hand_size: 4,
+            ..Default::default()
+        };
+        assert_eq!(
+            hand.best_hand_with(rules).expect("with Four Fingers").rank,
+            crate::rank::HandRank::Straight
+        );
+    }
+
+    #[test]
+    fn test_smeared_joker_pairs_the_suits_for_a_flush() {
+        let mixed = [
+            (Value::Two, Suit::Heart),
+            (Value::Five, Suit::Diamond),
+            (Value::Seven, Suit::Heart),
+            (Value::Nine, Suit::Diamond),
+            (Value::Jack, Suit::Heart),
+        ];
+        let hand = SelectHand::new(
+            mixed
+                .iter()
+                .map(|(v, s)| Card::new(*v, *s))
+                .collect::<Vec<_>>(),
+        );
+        assert_ne!(
+            hand.best_hand().expect("hand").rank,
+            crate::rank::HandRank::Flush,
+            "two hearts and three diamonds is not a flush"
+        );
+        let rules = crate::hand::HandRules {
+            smeared_suits: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            hand.best_hand_with(rules).expect("smeared").rank,
+            crate::rank::HandRank::Flush,
+            "Smeared Joker makes them one suit"
+        );
+    }
+
+    #[test]
+    fn test_shortcut_allows_a_gappy_straight() {
+        let gappy = [
+            (Value::Three, Suit::Heart),
+            (Value::Five, Suit::Club),
+            (Value::Seven, Suit::Spade),
+            (Value::Nine, Suit::Diamond),
+            (Value::Jack, Suit::Heart),
+        ];
+        let hand = SelectHand::new(
+            gappy
+                .iter()
+                .map(|(v, s)| Card::new(*v, *s))
+                .collect::<Vec<_>>(),
+        );
+        assert_ne!(
+            hand.best_hand().expect("hand").rank,
+            crate::rank::HandRank::Straight
+        );
+        let rules = crate::hand::HandRules {
+            gappy_straights: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            hand.best_hand_with(rules).expect("gappy").rank,
+            crate::rank::HandRank::Straight
+        );
+    }
+
+    #[test]
+    fn test_splash_scores_every_played_card() {
+        let hand_cards = [
+            (Value::Two, Suit::Heart),
+            (Value::Two, Suit::Club),
+            (Value::Five, Suit::Club),
+            (Value::Seven, Suit::Heart),
+            (Value::King, Suit::Spade),
+        ];
+        let mut g = Game::new(Config {
+            seed: Some(1),
+            ..Config::default()
+        });
+        g.start();
+        g.blind = Some(Blind::Small);
+        g.stage = Stage::Blind(Blind::Small);
+        g.jokers = vec![Jokers::Splash(Default::default())];
+        g.effect_registry
+            .register_jokers(g.jokers.clone(), &g.clone());
+        g.available
+            .extend(hand_cards.iter().map(|(v, s)| Card::new(*v, *s)).collect());
+        let hand = SelectHand::new(g.available.cards()).best_hand().unwrap();
+        let (score, trace) = g.calc_score_traced(hand);
+        let scored_ids: Vec<usize> = trace
+            .0
+            .iter()
+            .filter(|s| matches!(s.source, crate::score::ScoreSource::PlayedCard(_)))
+            .map(|s| match &s.source {
+                crate::score::ScoreSource::PlayedCard(c) => c.id,
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(
+            scored_ids.len(),
+            5,
+            "every selected card scores, not just the two that paired"
+        );
+        assert!(score > 0);
+    }
+
+    #[test]
+    fn test_juggler_and_drunkard_change_derived_limits() {
+        let mut g = Game::new(Config {
+            seed: Some(1),
+            ..Config::default()
+        });
+        g.start();
+        let (hands, discards, size) = (g.plays_per_round(), g.discards_per_round(), g.hand_size());
+
+        g.jokers = vec![Jokers::Juggler(Default::default())];
+        assert_eq!(g.hand_size(), size + 1);
+
+        g.jokers = vec![Jokers::Drunkard(Default::default())];
+        assert_eq!(g.discards_per_round(), discards + 1);
+
+        g.jokers = vec![Jokers::Stuntman(Default::default())];
+        assert_eq!(g.hand_size(), size - 2);
+
+        g.jokers = vec![Jokers::MerryAndy(Default::default())];
+        assert_eq!(g.discards_per_round(), discards + 3);
+        assert_eq!(g.hand_size(), size - 1);
+
+        g.jokers.clear();
+        assert_eq!(
+            (g.plays_per_round(), g.discards_per_round(), g.hand_size()),
+            (hands, discards, size)
+        );
+    }
+
+    #[test]
+    fn test_oops_all_sixes_doubles_the_probability_multiplier() {
+        let mut g = Game::new(Config {
+            seed: Some(1),
+            ..Config::default()
+        });
+        assert_eq!(g.prob_mult(), 1);
+        g.jokers = vec![Jokers::OopsAllSixes(Default::default())];
+        assert_eq!(g.prob_mult(), 2);
+        g.jokers.push(Jokers::OopsAllSixes(Default::default()));
+        assert_eq!(g.prob_mult(), 4, "and compounds");
+    }
+
+    #[test]
+    fn test_astronomer_makes_celestial_packs_free() {
+        let mut g = Game::new(Config {
+            seed: Some(1),
+            ..Config::default()
+        });
+        assert!(!g.celestial_packs_are_free());
+        g.jokers = vec![Jokers::Astronomer(Default::default())];
+        assert!(g.celestial_packs_are_free());
+    }
+
+    #[test]
+    fn test_misprint_rolls_stay_in_range_and_vary() {
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..300 {
+            let mut g = Game::new(Config {
+                seed: Some(rand::random::<u64>()),
+                ..Config::default()
+            });
+            seen.insert(g.misprint_roll());
+        }
+        assert!(seen.iter().all(|v| (0..=23).contains(v)), "in range");
+        assert!(seen.len() > 5, "and actually varies: {seen:?}");
+    }
 
     // balatro_types::Jokers now defines all jokers but only a subset have
     // `effects()` behavior implemented. Shop/pack generation
     // must never offer joker that silently does nothing.
     #[test]
-    fn test_exactly_74_jokers_implemented() {
+    fn test_joker_implementation_count_is_tracked() {
+        // Bumped as jokers land, and checked against `is_implemented` so
+        // the two can't drift apart silently.
         let count = Jokers::iter().filter(|j| j.is_implemented()).count();
-        assert_eq!(count, 74);
+        assert_eq!(count, IMPLEMENTED_JOKER_COUNT);
     }
 
     #[test]

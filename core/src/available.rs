@@ -150,6 +150,12 @@ impl Available {
         });
     }
 
+    /// Every card, mutable. Used by the face-down bosses' test helper.
+    #[cfg(test)]
+    pub(crate) fn select_all_mut(&mut self) -> Vec<&mut Card> {
+        self.cards.iter_mut().map(|(c, _)| c).collect()
+    }
+
     pub fn cards(&self) -> Vec<Card> {
         self.cards.iter().map(|(c, _)| *c).collect()
     }

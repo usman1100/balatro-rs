@@ -50,6 +50,14 @@ impl Deck {
         self.cards.clone()
     }
 
+    /// Face down never survives a blind: The House, The Mark, The Fish and
+    /// The Wheel all flip the whole hand back at the end of the round.
+    pub(crate) fn clear_face_down(&mut self) {
+        for card in &mut self.cards {
+            card.face_down = false;
+        }
+    }
+
     // // Loops through cards, assigning index to each equal to index in deck
     // pub(crate) fn index_cards(&mut self) {
     //     let mut i = 0;
