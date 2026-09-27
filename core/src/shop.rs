@@ -37,12 +37,30 @@ impl ShopContext<'_> {
         DEFAULT_SHOP_CARD_SLOTS + self.vouchers.shop_card_slots_bonus()
     }
 
+    /// The slice of the context that pack contents depend on.
+    pub(crate) fn pack_inputs(&self) -> PackInputs<'_> {
+        PackInputs {
+            jokers: self.held_jokers,
+            omen_globe: self.vouchers.has(Voucher::OmenGlobe),
+        }
+    }
+
     /// Edition probabilities are scaled by both the game-wide probability
     /// multiplier and Hone/Glow Up.
     pub(crate) fn edition_prob_mult(&self) -> u32 {
         self.prob_mult
             .saturating_mul(self.vouchers.edition_rate_mult())
     }
+}
+
+/// The player's holdings a pack draw has to respect. A struct for the same
+/// reason as `ShopContext`: the list grows with every voucher that touches
+/// pack contents, and a positional list of it stops being readable.
+#[derive(Copy, Clone)]
+pub(crate) struct PackInputs<'a> {
+    pub jokers: &'a [Jokers],
+    /// Omen Globe: lets a Spectral stand in for a Tarot in an Arcana pack.
+    pub omen_globe: bool,
 }
 
 #[cfg(test)]
@@ -673,12 +691,11 @@ impl PackGenerator {
         prob_mult: u32,
         category: PackCategory,
         size: PackSize,
-        held_jokers: &[Jokers],
+        held: PackInputs<'_>,
         rng: &mut impl Rng,
     ) -> Pack {
         let count = balatro_seed::pack_card_count(category, size) as usize;
-        let contents =
-            self.gen_contents(&category, count, planetarium, prob_mult, held_jokers, rng);
+        let contents = self.gen_contents(&category, count, planetarium, prob_mult, held, rng);
         Pack {
             category,
             size,
@@ -691,7 +708,7 @@ impl PackGenerator {
         planetarium: &Planetarium,
         prob_mult: u32,
         exclude: Option<(&PackCategory, &PackSize)>,
-        held_jokers: &[Jokers],
+        held: PackInputs<'_>,
         rng: &mut impl Rng,
     ) -> Pack {
         #[rustfmt::skip]
@@ -728,7 +745,7 @@ impl PackGenerator {
         // shape, everything else is 3/5/5.
         let count = balatro_seed::pack_card_count(*category, *size) as usize;
 
-        let contents = self.gen_contents(category, count, planetarium, prob_mult, held_jokers, rng);
+        let contents = self.gen_contents(category, count, planetarium, prob_mult, held, rng);
 
         Pack {
             category: *category,
@@ -743,15 +760,29 @@ impl PackGenerator {
         count: usize,
         planetarium: &Planetarium,
         prob_mult: u32,
-        held_jokers: &[Jokers],
+        held: PackInputs<'_>,
         rng: &mut impl Rng,
     ) -> Vec<PackContent> {
         let joker_gen = JokerGenerator {};
         let consumable_gen = ConsumableGenerator {};
+        let held_jokers = held.jokers;
+        let omen_globe = held.omen_globe;
 
         match category {
+            // Omen Globe, transcribed from `next_arcana_pack`: each card is
+            // a Spectral if a roll clears 0.8, otherwise a Tarot. The roll
+            // is per card, not per pack, so a pack can come out mixed. It
+            // is a raw roll on the game's own `omen_globe` node, so it is
+            // deliberately not scaled by `prob_mult` — real mode gets the
+            // exact node from balatro-seed.
             PackCategory::Arcana => (0..count)
-                .map(|_| PackContent::Tarot(crate::tarot::random_tarot(rng)))
+                .map(|_| {
+                    if omen_globe && rng.gen_ratio(1u32, 5u32) {
+                        PackContent::Spectral(crate::spectral::random_spectral(rng))
+                    } else {
+                        PackContent::Tarot(crate::tarot::random_tarot(rng))
+                    }
+                })
                 .collect(),
             PackCategory::Celestial => {
                 let mut exclude: Vec<Planets> = vec![];
@@ -908,7 +939,16 @@ mod tests {
         let planetarium = Planetarium::new();
         let gen = PackGenerator {};
         for _ in 0..50 {
-            let pack = gen.gen_pack(&planetarium, 1, None, &[], &mut rand::thread_rng());
+            let pack = gen.gen_pack(
+                &planetarium,
+                1,
+                None,
+                PackInputs {
+                    jokers: &[],
+                    omen_globe: false,
+                },
+                &mut rand::thread_rng(),
+            );
             let expected_count =
                 balatro_seed::pack_card_count(pack.category, pack.size) as usize;
             assert_eq!(pack.contents.len(), expected_count);
@@ -921,7 +961,16 @@ mod tests {
         let gen = PackGenerator {};
         let mut saw_spectral = false;
         for _ in 0..200 {
-            let pack = gen.gen_pack(&planetarium, 1, None, &[], &mut rand::thread_rng());
+            let pack = gen.gen_pack(
+                &planetarium,
+                1,
+                None,
+                PackInputs {
+                    jokers: &[],
+                    omen_globe: false,
+                },
+                &mut rand::thread_rng(),
+            );
             if pack.category != PackCategory::Spectral {
                 continue;
             }

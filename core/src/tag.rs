@@ -25,8 +25,6 @@ pub(crate) struct TagState {
     pub(crate) double: bool,
     /// Coupon: the next shop's Jokers, consumables and packs are all free.
     pub(crate) coupon: bool,
-    /// Boss: re-roll the next boss blind. Consumed by the boss draw.
-    pub(crate) boss_reroll: bool,
     /// Juggle: extra hand size for the next round only.
     pub(crate) hand_size_bonus: usize,
     /// D6: the next shop's rerolls start at $0.

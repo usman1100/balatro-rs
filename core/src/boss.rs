@@ -32,11 +32,17 @@ pub(crate) struct BossState {
     pub(crate) played_this_ante: HashSet<usize>,
     /// Cerulean Bell: the card forced to stay selected.
     pub(crate) forced_card: Option<usize>,
+    /// Director's Cut: whether this ante's one boss reroll has been spent.
+    /// Retcon ignores this and rerolls as often as you can pay for.
+    pub(crate) boss_rerolled_this_ante: bool,
 }
 
 impl BossState {
     /// Clears everything that is scoped to a single blind. Called when a
     /// new blind is selected, and when the run moves to a new ante.
+    ///
+    /// `boss_rerolled_this_ante` deliberately survives this: Director's Cut
+    /// allows one reroll per *ante*, not per blind.
     pub(crate) fn on_new_blind(&mut self) {
         self.last_played = None;
         self.locked_rank = None;

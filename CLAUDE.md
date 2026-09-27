@@ -43,9 +43,9 @@ cargo build -p balatro-rs --features python
 
 ## What `core`'s game engine does and doesn't implement
 
-Implemented: poker hand scoring, playing/discarding/reordering cards, blind progression (small/big/boss), ante progression (1-8), money/interest, buying/selling jokers, tarots, planets, spectrals, card enhancements/editions/seals in effect, all 24 tags, all 28 boss blind modifiers, 29/32 vouchers. All 150 jokers have real behavior.
+Implemented: poker hand scoring, playing/discarding/reordering cards, blind progression (small/big/boss), ante progression (1-8), money/interest, buying/selling jokers, tarots, planets, spectrals, card enhancements/editions/seals in effect, all 24 tags, all 28 boss blind modifiers, all 32 vouchers. All 150 jokers have real behavior.
 
-Not implemented: alternative decks/stakes (`core` never reads `DeckVariant` or `Stake`), sticker behavior (eternal/perishable/rental are data only), the remaining 2 jokers. Three vouchers (Omen Globe, Director's Cut, Retcon) are inert. `Effects::OnPlay` and `Effects::OnHandRank` are collected but never fired.
+Not implemented: alternative decks/stakes (`core` never reads `DeckVariant` or `Stake`), sticker behavior (eternal/perishable/rental are data only), the remaining 2 jokers. `Effects::OnPlay` and `Effects::OnHandRank` are collected but never fired.
 
 Partial hands, face-down cards and the four partial-hand jokers (Splash, Four Fingers, Shortcut, Smeared Joker) are all implemented. Every joker now has real behaviour; Perkeo works because `Consumable` carries an `Edition`.
 

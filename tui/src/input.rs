@@ -521,6 +521,11 @@ fn handle_key_shop(app: &mut AppState, key: KeyEvent) {
     if key.code == KeyCode::Char('n') {
         let _ = app.game.handle_action(Action::NextRound());
     }
+    // Director's Cut / Retcon. A global binding rather than a focus zone,
+    // since it has no button on screen.
+    if key.code == KeyCode::Char('b') {
+        let _ = app.game.handle_action(Action::RerollBoss());
+    }
 }
 
 fn handle_key_shop_packs(app: &mut AppState, key: KeyEvent) {

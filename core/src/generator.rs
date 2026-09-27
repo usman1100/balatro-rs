@@ -372,6 +372,13 @@ impl Game {
         Some(vec![Action::Reroll()].into_iter())
     }
 
+    fn gen_actions_reroll_boss(&self) -> Option<impl Iterator<Item = Action>> {
+        if !self.can_reroll_boss() {
+            return None;
+        }
+        Some(vec![Action::RerollBoss()].into_iter())
+    }
+
     // are we in the temp tarot hand stage?
     // if so, we draw a temp hand and give options for applying the tarot.
     fn gen_actions_tarot_hand(&self) -> Option<impl Iterator<Item = Action>> {
@@ -533,6 +540,7 @@ impl Game {
         let pick_pack_cards = self.gen_actions_pick_pack_card();
         let skip_packs = self.gen_actions_skip_pack();
         let rerolls = self.gen_actions_reroll();
+        let reroll_bosses = self.gen_actions_reroll_boss();
 
         select_cards
             .into_iter()
@@ -559,6 +567,7 @@ impl Game {
             .chain(pick_pack_cards.into_iter().flatten())
             .chain(skip_packs.into_iter().flatten())
             .chain(rerolls.into_iter().flatten())
+            .chain(reroll_bosses.into_iter().flatten())
     }
 
     fn unmask_action_space_select_cards(&self, space: &mut ActionSpace) {
@@ -828,6 +837,12 @@ impl Game {
         space.unmask_reroll();
     }
 
+    fn unmask_action_space_reroll_boss(&self, space: &mut ActionSpace) {
+        if self.can_reroll_boss() {
+            space.unmask_reroll_boss();
+        }
+    }
+
     fn unmask_action_space_tarot_hand(&self, space: &mut ActionSpace) {
         let Stage::TarotHand(t) = self.stage else {
             return;
@@ -944,6 +959,7 @@ impl Game {
         self.unmask_action_space_skip_pack(&mut space);
         self.unmask_action_space_sort_hand(&mut space);
         self.unmask_action_space_reroll(&mut space);
+        self.unmask_action_space_reroll_boss(&mut space);
         space
     }
 }

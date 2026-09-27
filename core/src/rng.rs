@@ -264,7 +264,7 @@ impl RngBackend for FastBackend {
             ctx.planetarium,
             ctx.edition_prob_mult(),
             exclude,
-            ctx.held_jokers,
+            ctx.pack_inputs(),
             &mut self.rng,
         )
     }
@@ -280,7 +280,7 @@ impl RngBackend for FastBackend {
             ctx.edition_prob_mult(),
             category,
             size,
-            ctx.held_jokers,
+            ctx.pack_inputs(),
             &mut self.rng,
         )
     }

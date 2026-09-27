@@ -213,7 +213,7 @@ Behaviour implemented in `core`:
 - all 22 tarots, all 18 spectrals, all 12 planets
 - all 8 enhancements, all 5 editions, all 4 seals
 - all 24 tags
-- 29/32 vouchers
+- all 32 vouchers
 - all 28 boss blind modifiers
 - all 150 jokers
 - effect procs in real RNG mode (one node per effect)

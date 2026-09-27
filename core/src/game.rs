@@ -50,6 +50,8 @@ const MADNESS_MULT_STEP: f32 = 0.5;
 const CEREMONIAL_DAGGER_VALUE_MULT: usize = 2;
 const INVISIBLE_JOKER_ROUNDS: usize = 2;
 const MR_BONES_DIVISOR: usize = 4;
+/// What Director's Cut and Retcon charge per boss reroll.
+const VOUCHER_BOSS_REROLL_COST: usize = 10;
 /// One Credit Card's worth of debt allowance.
 pub(crate) const CREDIT_CARD_DEBT: i64 = 20;
 const MISPRINT_MAX: i32 = 23;
@@ -513,6 +515,78 @@ impl Game {
         self.jokers
             .iter()
             .any(|j| matches!(j, Jokers::Astronomer(_)))
+    }
+
+    /// Replaces this ante's boss blind with a fresh draw, spending Director's
+    /// Cut's allowance. The Boss Tag uses this for free; the vouchers charge
+    /// for it.
+    fn boss_reroll_allowance(&self) -> bool {
+        // Retcon rerolls as often as you can pay for, so it ignores the
+        // per-ante flag entirely.
+        if self.vouchers.boss_rerolls_unlimited() {
+            return true;
+        }
+        self.vouchers.has(Voucher::DirectorsCut) && !self.boss_state.boss_rerolled_this_ante
+    }
+
+    /// Spends the allowance, for the calls that actually reroll.
+    fn spend_boss_reroll_allowance(&mut self) -> bool {
+        if self.vouchers.boss_rerolls_unlimited() {
+            return true;
+        }
+        if !self.boss_reroll_allowance() {
+            return false;
+        }
+        self.boss_state.boss_rerolled_this_ante = true;
+        true
+    }
+
+    /// Draws a replacement boss blind. A new draw means another one is now
+    /// spent, so the pool cycles on the real game's `boss` node.
+    fn draw_replacement_boss(&mut self) {
+        let boss = self.backend.draw_boss(self.ante_current as i32);
+        self.current_boss = Some(boss);
+    }
+
+    /// The Boss Tag's reroll, which is always free. It does still use up
+    /// Director's Cut's one reroll for the ante, so you cannot pay for a
+    /// second one after spending the tag.
+    fn reroll_boss_from_tag(&mut self) {
+        if self.vouchers.has(Voucher::DirectorsCut) {
+            self.boss_state.boss_rerolled_this_ante = true;
+        }
+        self.draw_replacement_boss();
+    }
+
+    /// Whether the paid boss reroll is on offer right now, and what it costs.
+    /// Available in the shop and on the pre-blind screen, so the choice is
+    /// made before committing to the blind.
+    pub fn can_reroll_boss(&self) -> bool {
+        if !matches!(self.stage, Stage::Shop() | Stage::PreBlind()) {
+            return false;
+        }
+        if !self.vouchers.can_reroll_boss() {
+            return false;
+        }
+        self.boss_reroll_allowance() && self.can_afford(VOUCHER_BOSS_REROLL_COST)
+    }
+
+    pub(crate) fn reroll_boss(&mut self) -> Result<(), GameError> {
+        if !matches!(self.stage, Stage::Shop() | Stage::PreBlind()) {
+            return Err(GameError::InvalidStage);
+        }
+        if !self.vouchers.can_reroll_boss() {
+            return Err(GameError::InvalidAction);
+        }
+        if !self.spend_boss_reroll_allowance() {
+            return Err(GameError::InvalidAction);
+        }
+        if !self.can_afford(VOUCHER_BOSS_REROLL_COST) {
+            return Err(GameError::InvalidBalance);
+        }
+        self.money -= VOUCHER_BOSS_REROLL_COST as i64;
+        self.draw_replacement_boss();
+        Ok(())
     }
 
     /// Jokers that fire when the shop is left rather than on a score.
@@ -1609,8 +1683,10 @@ impl Game {
             Tag::Investment => self.tag_state.investment = true,
             // A second voucher slot in the next shop.
             Tag::Voucher => self.tag_state.voucher_slot = true,
-            // Re-rolls the next boss blind, applied in `start_ante`.
-            Tag::Boss => self.tag_state.boss_reroll = true,
+            // Re-rolls this ante's boss blind, which was drawn when the ante
+            // started. The real game also spends Director's Cut's one reroll
+            // on it, and so does this.
+            Tag::Boss => self.reroll_boss_from_tag(),
             // Pack tags open their pack immediately, so they bypass the
             // shop and go straight to the pack stage. Size and category come
             // from the real game: Spectral is the one that isn't a Mega.
@@ -2495,6 +2571,10 @@ impl Game {
     /// Everything an ante needs drawn before its first blind: the lock-table
     /// update, the two skippable tags, and the boss.
     fn start_ante(&mut self) {
+        // Director's Cut's allowance is per ante, so it clears here rather
+        // than in the ante-advance path: this is the single place every
+        // ante goes through.
+        self.boss_state.boss_rerolled_this_ante = false;
         self.backend.on_ante_start(self.ante_current as i32);
         let (small, big) = self.backend.draw_ante_tags(self.ante_current as i32);
         self.small_blind_tag = small;
@@ -2504,11 +2584,7 @@ impl Game {
         if big == Tag::Orbital || small == Tag::Orbital {
             self.tag_state.orbital_hand = Some(self.backend.roll_random_hand());
         }
-        let mut boss = self.backend.draw_boss(self.ante_current as i32);
-        if std::mem::take(&mut self.tag_state.boss_reroll) {
-            boss = self.backend.draw_boss(self.ante_current as i32);
-        }
-        self.current_boss = Some(boss);
+        self.current_boss = Some(self.backend.draw_boss(self.ante_current as i32));
     }
 
     pub fn skip_tag(&self, blind: Blind) -> Option<Tag> {
@@ -2707,6 +2783,7 @@ impl Game {
                 Stage::PackOpen() => self.skip_pack(),
                 _ => Err(GameError::InvalidStage),
             },
+            Action::RerollBoss() => self.reroll_boss(),
             Action::Reroll() => match self.stage {
                 Stage::Shop() => self.reroll(),
                 _ => Err(GameError::InvalidAction),
@@ -5483,12 +5560,133 @@ mod tests {
     }
 
     #[test]
-    fn test_boss_tag_rerolls_the_next_boss() {
+    fn test_boss_tag_rerolls_this_antes_boss() {
         let mut g = game_in_shop_with_tag(Tag::Boss);
-        assert!(g.tag_state.boss_reroll);
+        g.current_boss = None;
+        g.apply_tag(Tag::Boss);
+        assert!(
+            g.current_boss.is_some(),
+            "the tag draws a replacement for the boss you are about to fight"
+        );
+    }
+
+    #[test]
+    fn test_boss_tag_does_not_touch_the_next_antes_boss() {
+        let mut g = game_in_shop_with_tag(Tag::Boss);
+        g.apply_tag(Tag::Boss);
+        let rerolled = g.current_boss;
+        g.ante_current = g.ante_current.next(Ante::Eight).expect("not on ante eight");
         g.start_ante();
-        assert!(!g.tag_state.boss_reroll, "consumed by the boss draw");
-        assert!(g.current_boss.is_some());
+        assert_ne!(
+            g.current_boss, rerolled,
+            "the tag's reroll is spent on this ante, not carried to the next"
+        );
+    }
+
+    #[test]
+    fn test_directors_cut_allows_one_boss_reroll_per_ante() {
+        let mut g = game_in_shop_with_tag(Tag::Voucher);
+        g.vouchers.redeem(Voucher::DirectorsCut);
+        g.money = 100;
+        let first = g.current_boss;
+        g.reroll_boss().expect("first reroll");
+        assert_eq!(g.money, 90, "$10 per reroll");
+        assert_ne!(g.current_boss, first);
+        assert!(g.reroll_boss().is_err(), "Director's Cut is once per ante");
+        g.ante_current = g.ante_current.next(Ante::Eight).expect("not on ante eight");
+        g.start_ante();
+        g.stage = Stage::Shop();
+        assert!(g.can_reroll_boss(), "the allowance resets with the ante");
+    }
+
+    #[test]
+    fn test_retcon_rerolls_the_boss_unlimitedly() {
+        let mut g = game_in_shop_with_tag(Tag::Voucher);
+        g.vouchers.redeem(Voucher::Retcon);
+        g.money = 100;
+        for expected in [90, 80, 70] {
+            g.reroll_boss().expect("reroll");
+            assert_eq!(g.money, expected);
+        }
+        g.money = 5;
+        assert!(
+            g.reroll_boss().is_err(),
+            "Retcon is unlimited but still costs $10"
+        );
+    }
+
+    #[test]
+    fn test_boss_tag_spends_directors_cuts_one_reroll() {
+        let mut g = game_in_shop_with_tag(Tag::Boss);
+        g.vouchers.redeem(Voucher::DirectorsCut);
+        g.money = 100;
+        g.apply_tag(Tag::Boss);
+        assert_eq!(g.money, 100, "the tag itself is free");
+        assert!(g.reroll_boss().is_err(), "the tag used up the ante's reroll");
+    }
+
+    #[test]
+    fn test_boss_reroll_needs_the_voucher() {
+        let mut g = game_in_shop_with_tag(Tag::Voucher);
+        g.money = 100;
+        assert!(!g.can_reroll_boss());
+        assert!(g.reroll_boss().is_err());
+    }
+
+    #[test]
+    fn test_boss_reroll_is_only_offered_before_the_fight() {
+        let mut g = game_in_shop_with_tag(Tag::Voucher);
+        g.vouchers.redeem(Voucher::DirectorsCut);
+        g.money = 100;
+        g.stage = Stage::Blind(Blind::Big);
+        assert!(!g.can_reroll_boss(), "not once the blind is being played");
+        assert!(g.reroll_boss().is_err());
+    }
+
+    #[test]
+    fn test_omen_globe_makes_arcana_packs_contain_spectrals() {
+        let no_globe = Vouchers::default();
+        let mut with_globe = Vouchers::default();
+        with_globe.redeem(Voucher::OmenGlobe);
+        let spectrals = |vouchers: &Vouchers| {
+            let mut total = 0;
+            for seed in 0..400 {
+                let mut g = Game::new(Config {
+                    seed: Some(seed),
+                    ..Config::default()
+                });
+                for v in vouchers.owned() {
+                    g.vouchers.redeem(*v);
+                }
+                g.stage = Stage::Shop();
+                let ctx = g.shop_context(&g.planetarium, &g.consumables, &g.jokers, &g.vouchers);
+                let pack = g
+                    .backend
+                    .gen_pack_of(&ctx, PackCategory::Arcana, PackSize::Normal);
+                total += pack
+                    .contents
+                    .iter()
+                    .filter(|c| matches!(c, PackContent::Spectral(_)))
+                    .count();
+            }
+            total
+        };
+        assert_eq!(
+            spectrals(&no_globe),
+            0,
+            "without the voucher an Arcana pack is all tarots"
+        );
+        let with_spectrals = spectrals(&with_globe);
+        assert!(
+            with_spectrals > 0,
+            "Omen Globe lets spectrals into Arcana packs"
+        );
+        // 3 cards a pack, 400 packs, 20% each: 240 expected. Wide bounds, so
+        // this catches a wrong rate without being flaky.
+        assert!(
+            (100..=400).contains(&with_spectrals),
+            "got {with_spectrals} spectrals, expected roughly 240"
+        );
     }
 
     #[test]
@@ -6095,7 +6293,6 @@ mod tests {
         g.money = (g.money - 5).max(g.debt_floor());
         assert_eq!(g.money, -20, "clamped at the floor");
     }
-
 
     // --- Negative consumables and Perkeo ---
     use crate::planet::Planets;

@@ -39,9 +39,10 @@ const PACK_CONTENTS_MAX: usize = 5;
 // 106: sort hand (rank)
 // 107: sort hand (suit)
 // 108: reroll
-// 109: apply spectral
+// 109: reroll boss
+// 110: apply spectral
 //
-// We end up with a vector of length 110 where each index
+// We end up with a vector of length 111 where each index
 // represents a potential action.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "python", pyclass(eq))]
@@ -69,6 +70,7 @@ pub struct ActionSpace {
     pub skip_pack: Vec<usize>,
     pub sort_hand: Vec<usize>,
     pub reroll: Vec<usize>,
+    pub reroll_boss: Vec<usize>,
     pub apply_spectral: Vec<usize>,
 }
 
@@ -96,6 +98,7 @@ impl ActionSpace {
             + self.skip_pack.len()
             + self.sort_hand.len()
             + self.reroll.len()
+            + self.reroll_boss.len()
             + self.apply_spectral.len()
     }
 
@@ -275,8 +278,16 @@ impl ActionSpace {
         self.reroll_min()
     }
 
+    fn reroll_boss_min(&self) -> usize {
+        self.reroll_max() + 1
+    }
+
+    fn reroll_boss_max(&self) -> usize {
+        self.reroll_boss_min() + self.reroll_boss.len().saturating_sub(1)
+    }
+
     fn apply_spectral_min(&self) -> usize {
-        self.reroll_min() + self.reroll.len()
+        self.reroll_boss_max() + 1
     }
 
     fn apply_spectral_max(&self) -> usize {
@@ -431,6 +442,10 @@ impl ActionSpace {
 
     pub(crate) fn unmask_reroll(&mut self) {
         self.reroll[0] = 1;
+    }
+
+    pub(crate) fn unmask_reroll_boss(&mut self) {
+        self.reroll_boss[0] = 1;
     }
 
     pub(crate) fn unmask_apply_spectral(&mut self) {
@@ -618,6 +633,7 @@ impl ActionSpace {
             self.skip_pack.clone(),
             self.sort_hand.clone(),
             self.reroll.clone(),
+            self.reroll_boss.clone(),
             self.apply_spectral.clone(),
         ]
         .concat()
@@ -657,6 +673,7 @@ impl From<Config> for ActionSpace {
             skip_pack: vec![0; 1],
             sort_hand: vec![0; 2],
             reroll: vec![0; 1],
+            reroll_boss: vec![0; 1],
             apply_spectral: vec![0; 1],
         }
     }
@@ -688,6 +705,7 @@ impl From<ActionSpace> for Vec<usize> {
             a.skip_pack,
             a.sort_hand,
             a.reroll,
+            a.reroll_boss,
             a.apply_spectral,
         ]
         .concat()
@@ -739,9 +757,9 @@ mod tests {
         // + 2 use_consumable + 1 apply_tarot
         // + 5 sell_joker + 2 sell_consumable
         // + 2 buy_pack + 5 pick_pack_card + 1 skip_pack + 2 sort_hand + 1 reroll
-        // + 1 apply_spectral = 110
-        assert_eq!(a.size(), 110);
-        assert_eq!(a.to_vec().len(), 110);
+        // + 1 apply_spectral + 1 reroll_boss = 111
+        assert_eq!(a.size(), 111);
+        assert_eq!(a.to_vec().len(), 111);
     }
 
     #[test]

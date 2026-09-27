@@ -189,6 +189,18 @@ impl Vouchers {
         self.has(Voucher::OmenGlobe)
     }
 
+    /// Director's Cut: one boss reroll per ante. Retcon supersedes it with
+    /// no limit, so holding either one is what makes a reroll available.
+    pub fn can_reroll_boss(&self) -> bool {
+        self.has(Voucher::DirectorsCut) || self.has(Voucher::Retcon)
+    }
+
+    /// Retcon: unlimited boss rerolls per ante, ignoring Director's Cut's
+    /// once-per-ante allowance.
+    pub fn boss_rerolls_unlimited(&self) -> bool {
+        self.has(Voucher::Retcon)
+    }
+
     /// Observatory: each held Planet card gives x1.5 Mult when its own
     /// hand is scored.
     pub fn observatory(&self) -> bool {

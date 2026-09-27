@@ -43,6 +43,7 @@ pub fn render(f: &mut Frame, app: &mut AppState, area: Rect) {
         bind("s", "Sort hand rank/suit  (blind)"),
         bind("d", "Discard    (blind)"),
         bind("n", "Next round (shop)"),
+        bind("b", "Reroll boss blind (Director's Cut / Retcon)"),
         Line::from(""),
         Line::from(Span::styled(
             close_label,

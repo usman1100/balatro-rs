@@ -66,7 +66,7 @@ variable-length iterator.
 - [x] buying/selling/using jokers, tarots, planets and spectrals
 - [x] card enhancements, editions, and seals in effect
 - [x] all 24 tags
-- [x] all 28 boss blind modifiers, 29/32 vouchers
+- [x] all 28 boss blind modifiers, all 32 vouchers
 - [x] all 150 jokers implemented
 
 The following are missing and may or may not be added:
