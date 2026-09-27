@@ -4,12 +4,14 @@ A toolbox of Rust crates for [Balatro](https://www.playbalatro.com/)
 
 ## Features
 
-- rules engine and move generator for simulation/RL (with python bindings)
-- real save-file (`.jkr`) parsing
-- byte-accurate port of the game's actual seed/RNG algorithm
-- TUI for playing core game, CLIs for various other functionlity
+- [x] rules engine and move generator for simulation/RL (with python bindings)
+- [x] real save-file (`.jkr`) parsing
+- [x] byte-accurate port of the game's actual seed/RNG algorithm
+- [x] TUI for playing core game, CLIs for various other functionlity
 
 ## Crates
+
+See `ARCHITECTURE.md` for the crate graph and design rationale.
 
 | Crate                                 | What it does                                                                                                                                                                         |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -63,14 +65,23 @@ variable-length iterator.
 - [x] ante progression (1-8) and blind progression (small/big/boss)
 - [x] buying/selling/using jokers, tarots, planets and spectrals
 - [x] card enhancements, editions, and seals in effect
-- [x] boss blinds, vouchers
-- [x] 74/150 jokers implemented so far
+- [x] all 24 tags
+- [x] all 28 boss blind modifiers, 29/32 vouchers
+- [x] 148/150 jokers implemented so far
 
 The following are missing and may or may not be added:
 
-- [ ] skip tags
 - [ ] alternative decks
 - [ ] alternative stakes
+- [ ] sticker behavior (eternal/perishable/rental are data only)
+- [ ] negative money (Credit Card) and Negative-edition consumables (Perkeo)
+
+`RngMode::Real` drives shop, pack, voucher, tag, boss and effect-proc
+generation through `balatro-seed`, and core's output matches `balatro-seed`'s
+`explore` for all of those. The port is still partial — deck shuffle, Glass
+Card's shatter roll, gameplay-triggered draws and sticker generation all fall
+back to the simplified `rand_chacha` stream. See `ARCHITECTURE.md` for the
+per-draw breakdown.
 
 ## Building & running
 

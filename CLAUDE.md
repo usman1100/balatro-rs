@@ -1,6 +1,6 @@
 # balatro-rs
 
-Game engine and move generator for a simplified version of Balatro, written in Rust with Python bindings.
+Game engine and move generator for Balatro, written in Rust with Python bindings. The goal is full compatibility with the real game: same rules, same scoring, and for a given seed the same generated shops, packs, vouchers, bosses and tags.
 
 ## Workspace
 
@@ -35,23 +35,21 @@ cd pylatro && maturin develop
 cargo run -p balatro-seed --bin explore -- SEED [--ante N]
 ```
 
-Core has optional features; default is `["serde", "python"]`. To build without Python bindings:
+Core has optional features; default is `["serde"]`. To build with the Python bindings:
 
 ```bash
-cargo build -p balatro-rs --no-default-features --features serde
+cargo build -p balatro-rs --features python
 ```
 
 ## What `core`'s game engine does and doesn't implement
 
-Implemented: poker hand scoring, playing/discarding/reordering cards, blind progression (small/big/boss), ante progression (1-8), money/interest, buying/selling jokers, tarots, planets, spectrals, card enhancements/editions in effect, vouchers (all 32 offered and purchasable). 74/150 jokers have real scoring behavior.
+Implemented: poker hand scoring, playing/discarding/reordering cards, blind progression (small/big/boss), ante progression (1-8), money/interest, buying/selling jokers, tarots, planets, spectrals, card enhancements/editions/seals in effect, all 24 tags, all 28 boss blind modifiers, 29/32 vouchers. 148/150 jokers have real behavior.
 
-Not implemented: skip blind/tags, boss blind modifiers, seals in effect (struct exists, unused), alternative decks/stakes (selecting one doesn't currently change starting deck composition or add restrictions), the remaining 76 jokers. Three vouchers (Omen Globe, Director's Cut, Retcon) are still inert — see `vouchers.md`.
+Not implemented: alternative decks/stakes (`core` never reads `DeckVariant` or `Stake`), sticker behavior (eternal/perishable/rental are data only), the remaining 2 jokers. Three vouchers (Omen Globe, Director's Cut, Retcon) are inert. `Effects::OnPlay` and `Effects::OnHandRank` are collected but never fired.
 
-This section is about `core`'s gameplay engine. It generates shops/packs with its own
-simplified, non-Balatro-accurate RNG — reproducing exactly what a real seed generates
-(shop contents, packs, vouchers, etc., matching the real game byte-for-byte) is
-`balatro-seed`'s job, not `core`'s; the two aren't wired together yet (see
-`ARCHITECTURE.md`'s "Open / deferred decisions").
+The two outstanding jokers are blocked on types rather than on logic: **Credit Card** needs a signed money type for the debt it allows, and `Game::money` is a `usize`; **Perkeo** needs an `Edition` on `Consumable`, which the byte-accurate draw pools in `balatro-seed` depend on the shape of. Partial hands, face-down cards and the four partial-hand jokers (Splash, Four Fingers, Shortcut, Smeared Joker) are all implemented.
+
+`core` can drive generation through `balatro-seed` via `RngMode::Real`, but the port is partial. Real: shop items, packs, pack contents, vouchers, tags, bosses, joker/tarot/planet/spectral draws, and effect procs. Still on the simplified `rand_chacha` stream: deck shuffle, Glass Card's shatter roll, gameplay-triggered joker/tarot/planet draws, sticker and shop-playing-card generation. So a real-mode run is not yet byte-accurate end to end. `balatro_seed::NODE_SOURCE_VERSION` records that the effect-proc node IDs were transcribed from a 1.0.0 source dump and are unvalidated.
 
 ## Two public APIs
 
