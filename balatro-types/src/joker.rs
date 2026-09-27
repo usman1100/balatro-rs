@@ -52,6 +52,8 @@ pub struct Stickers {
 pub enum SelectorValue {
     Suit(Suit),
     Value(Value),
+    /// To Do List locks onto a hand type.
+    Hand(HandRank),
 }
 
 /// Per-instance persistent state slot, uniform across all jokers and mostly
@@ -63,6 +65,10 @@ pub enum SelectorValue {
 pub struct JokerState {
     pub counter: f32,
     pub selector: Option<SelectorValue>,
+    /// The Idol locks onto a specific card, so it needs both a rank and a
+    /// suit. Nothing else uses this.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub selector2: Option<SelectorValue>,
 }
 
 /// `Jokers` is the definitive static repr of all jokers in the game.
@@ -93,6 +99,10 @@ macro_rules! make_jokers {
             pub instance_id: usize,
             #[cfg_attr(feature = "serde", serde(default))]
             pub state: JokerState,
+            /// Added on top of the cost-derived sell value, by Egg and
+            /// Gift Card.
+            #[cfg_attr(feature = "serde", serde(default))]
+            pub sell_bonus: usize,
         }
 
         impl PartialEq for $x {
@@ -115,15 +125,15 @@ macro_rules! make_jokers {
         )*
 
         impl Jokers {
-            fn inner_ref(&self) -> (&Edition, &Stickers, &usize, &JokerState) {
+            fn inner_ref(&self) -> (&Edition, &Stickers, &usize, &JokerState, &usize) {
                 match self {
-                    $(Self::$x(j) => (&j.edition, &j.stickers, &j.instance_id, &j.state),)*
+                    $(Self::$x(j) => (&j.edition, &j.stickers, &j.instance_id, &j.state, &j.sell_bonus),)*
                 }
             }
 
-            fn inner_mut(&mut self) -> (&mut Edition, &mut Stickers, &mut usize, &mut JokerState) {
+            fn inner_mut(&mut self) -> (&mut Edition, &mut Stickers, &mut usize, &mut JokerState, &mut usize) {
                 match self {
-                    $(Self::$x(j) => (&mut j.edition, &mut j.stickers, &mut j.instance_id, &mut j.state),)*
+                    $(Self::$x(j) => (&mut j.edition, &mut j.stickers, &mut j.instance_id, &mut j.state, &mut j.sell_bonus),)*
                 }
             }
 
@@ -132,6 +142,8 @@ macro_rules! make_jokers {
             pub fn instance_id(&self) -> usize { *self.inner_ref().2 }
             pub fn state(&self) -> JokerState { *self.inner_ref().3 }
             pub fn state_mut(&mut self) -> &mut JokerState { self.inner_mut().3 }
+            pub fn sell_bonus(&self) -> usize { *self.inner_ref().4 }
+            pub fn add_sell_bonus(&mut self, n: usize) { *self.inner_mut().4 += n; }
 
             pub fn set_edition(&mut self, edition: Edition) { *self.inner_mut().0 = edition; }
             pub fn set_stickers(&mut self, stickers: Stickers) { *self.inner_mut().1 = stickers; }
@@ -360,11 +372,13 @@ macro_rules! joker_data {
                 match self { $(Self::$variant(_) => $desc,)* }
             }
             pub fn sell_value(&self) -> usize {
-                std::cmp::max(1, self.cost() / 2)
+                std::cmp::max(1, self.cost() / 2) + self.sell_bonus()
             }
         }
     };
 }
+
+use crate::rank::HandRank;
 
 use Categories::*;
 use Rarity::*;
