@@ -161,7 +161,22 @@ fn card_inner_text(card: Card, debuffed: bool) -> Text<'static> {
         Line::from("")
     };
 
-    let content = vec![row0, row1, Line::from(""), row3, row4];
+    // A face-down card shows a back, not its identity. Its seal and
+    // enhancement indicators are hidden too, since they identify it.
+    let content = if card.face_down {
+        let back = Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD);
+        vec![
+            Line::from(""),
+            Line::from(Span::styled("  ****  ", back)),
+            Line::from(Span::styled("  ****  ", back)),
+            Line::from(""),
+            Line::from(""),
+        ]
+    } else {
+        vec![row0, row1, Line::from(""), row3, row4]
+    };
     // Center the fixed 5-row content within however tall the interior actually
     // is, rather than hardcoding a row count that goes stale if CARD_H changes.
     let pad = (CARD_H as usize).saturating_sub(2).saturating_sub(content.len());

@@ -126,6 +126,12 @@ impl GameState {
         self.game.shop.voucher
     }
 
+    /// The Voucher Tag's second offer, if one is on the shelf.
+    #[getter]
+    fn shop_voucher_tag_offer(&self) -> Option<Voucher> {
+        self.game.shop.voucher_tag_offer
+    }
+
     #[getter]
     fn seed(&self) -> u64 {
         self.game.seed

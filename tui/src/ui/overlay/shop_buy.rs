@@ -127,9 +127,12 @@ fn item_info(app: &AppState, slot: ShopSlot, w: u16) -> Option<(String, usize, V
                 pack_lines(pack, w),
             ))
         }
-        ShopSlot::Voucher => {
+        ShopSlot::Voucher(slot) => {
             // Vouchers are never discounted by Clearance Sale / Liquidation.
-            let voucher = app.game.shop.voucher?;
+            let voucher = match slot {
+                0 => app.game.shop.voucher,
+                _ => app.game.shop.voucher_tag_offer,
+            }?;
             Some((
                 format!(" {} ", voucher.name()),
                 voucher.cost(),

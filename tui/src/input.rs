@@ -1,6 +1,7 @@
 use crate::app::{AppState, DeckTab, FocusZone, Overlay, RunInfoTab, ShopSlot};
 use balatro_rs::action::{Action, SortBy};
 use balatro_rs::stage::Stage;
+use balatro_rs::voucher::Voucher;
 use crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
 
 pub fn handle_key(app: &mut AppState, key: KeyEvent) {
@@ -222,10 +223,13 @@ fn execute_shop_buy(app: &mut AppState, slot: ShopSlot) -> bool {
             Some(pack) => app.game.handle_action(Action::BuyPack(pack)).is_ok(),
             None => false,
         },
-        ShopSlot::Voucher => match app.game.shop.voucher {
-            Some(voucher) => app.game.handle_action(Action::BuyVoucher(voucher)).is_ok(),
-            None => false,
-        },
+        ShopSlot::Voucher(slot) => {
+            let offer = voucher_offer(app, slot);
+            match offer {
+                Some(voucher) => app.game.handle_action(Action::BuyVoucher(voucher)).is_ok(),
+                None => false,
+            }
+        }
         ShopSlot::PlayingCard(idx) => match app.game.shop.cards.get(idx).copied() {
             Some(card) => app
                 .game
@@ -521,8 +525,11 @@ fn handle_key_shop(app: &mut AppState, key: KeyEvent) {
 
 fn handle_key_shop_packs(app: &mut AppState, key: KeyEvent) {
     let pack_count = app.game.shop.packs.len();
-    // The ante's voucher offer occupies one slot past the last pack.
-    let count = pack_count + usize::from(app.game.shop.voucher.is_some());
+    // The ante's voucher offer occupies one slot past the last pack, and a
+    // second one follows it while a Voucher Tag is outstanding.
+    let count = pack_count
+        + usize::from(app.game.shop.voucher.is_some())
+        + usize::from(app.game.shop.voucher_tag_offer.is_some());
     match key.code {
         KeyCode::Left => {
             if app.cursor > 0 {
@@ -539,7 +546,8 @@ fn handle_key_shop_packs(app: &mut AppState, key: KeyEvent) {
                 app.overlay = Some(Overlay::ShopBuy(ShopSlot::Pack(app.cursor)));
                 app.overlay_cursor = 0;
             } else if app.cursor < count {
-                app.overlay = Some(Overlay::ShopBuy(ShopSlot::Voucher));
+                let slot = app.cursor - pack_count;
+                app.overlay = Some(Overlay::ShopBuy(ShopSlot::Voucher(slot)));
                 app.overlay_cursor = 0;
             }
         }
@@ -736,8 +744,11 @@ fn open_inspect(app: &mut AppState) {
         FocusZone::ShopPacks => {
             if let Some(pack) = app.game.shop.packs.get(app.cursor) {
                 app.overlay = Some(Overlay::Inspect(InspectTarget::Pack(pack.clone())));
-            } else if let Some(voucher) = app.game.shop.voucher {
-                app.overlay = Some(Overlay::Inspect(InspectTarget::Voucher(voucher)));
+            } else {
+                let slot = app.cursor - app.game.shop.packs.len();
+                if let Some(voucher) = voucher_offer(app, slot) {
+                    app.overlay = Some(Overlay::Inspect(InspectTarget::Voucher(voucher)));
+                }
             }
         }
         FocusZone::PackContents => {
@@ -788,6 +799,14 @@ pub fn handle_mouse(app: &mut AppState, event: MouseEvent) {
 
     let Some(widget_id) = hit else { return };
     dispatch_mouse_click(app, widget_id);
+}
+
+/// The shop's 0th or 1st voucher offer. The Voucher Tag adds the second.
+fn voucher_offer(app: &AppState, slot: usize) -> Option<Voucher> {
+    match slot {
+        0 => app.game.shop.voucher,
+        _ => app.game.shop.voucher_tag_offer,
+    }
 }
 
 fn dispatch_mouse_click(app: &mut AppState, id: crate::app::WidgetId) {
@@ -856,11 +875,11 @@ fn dispatch_mouse_click(app: &mut AppState, id: crate::app::WidgetId) {
                 app.overlay_cursor = 0;
             }
         }
-        ShopVoucher => {
+        ShopVoucher(slot) => {
             app.focus = FocusZone::ShopPacks;
-            app.cursor = app.game.shop.packs.len();
-            if app.game.shop.voucher.is_some() {
-                app.overlay = Some(Overlay::ShopBuy(ShopSlot::Voucher));
+            app.cursor = app.game.shop.packs.len() + slot;
+            if voucher_offer(app, slot).is_some() {
+                app.overlay = Some(Overlay::ShopBuy(ShopSlot::Voucher(slot)));
                 app.overlay_cursor = 0;
             }
         }
@@ -1044,7 +1063,7 @@ mod tests {
         assert_eq!(app.cursor, app.game.shop.packs.len());
 
         handle_key(&mut app, key(KeyCode::Enter));
-        assert!(matches!(app.overlay, Some(Overlay::ShopBuy(ShopSlot::Voucher))));
+        assert!(matches!(app.overlay, Some(Overlay::ShopBuy(ShopSlot::Voucher(0)))));
         handle_key(&mut app, key(KeyCode::Enter));
         assert!(app.game.vouchers.has(Voucher::Overstock));
         assert_eq!(app.game.shop.voucher, None);
@@ -1053,8 +1072,8 @@ mod tests {
     #[test]
     fn test_clicking_the_voucher_buys_it() {
         let mut app = shop_app(Voucher::Grabber);
-        dispatch_mouse_click(&mut app, WidgetId::ShopVoucher);
-        assert!(matches!(app.overlay, Some(Overlay::ShopBuy(ShopSlot::Voucher))));
+        dispatch_mouse_click(&mut app, WidgetId::ShopVoucher(0));
+        assert!(matches!(app.overlay, Some(Overlay::ShopBuy(ShopSlot::Voucher(0)))));
         handle_key(&mut app, key(KeyCode::Enter));
         assert!(app.game.vouchers.has(Voucher::Grabber));
     }

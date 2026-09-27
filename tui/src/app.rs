@@ -15,7 +15,8 @@ pub enum WidgetId {
     ShopConsumable(usize),
     ShopCard(usize),
     ShopPack(usize),
-    ShopVoucher,
+    /// Slot in the ShopPacks row. The Voucher Tag makes this 1.
+    ShopVoucher(usize),
     PackContent(usize),
     SkipPackButton,
     BlindOption(usize),
@@ -67,7 +68,8 @@ pub enum ShopSlot {
     Joker(usize),
     Consumable(usize),
     Pack(usize),
-    Voucher,
+    /// Which voucher offer. The Voucher Tag makes this 0 or 1.
+    Voucher(usize),
     PlayingCard(usize),
 }
 

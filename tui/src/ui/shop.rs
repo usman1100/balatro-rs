@@ -1,6 +1,7 @@
 use crate::app::{AppState, FocusZone, WidgetId};
 use crate::ui::cards::{self, rank_str, suit_char, suit_color, CARD_H, CARD_W, SLOT_W};
 use crate::ui::{joker_strip, sidebar};
+use balatro_rs::voucher::Voucher;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -260,14 +261,27 @@ fn render_packs_for_sale(f: &mut Frame, app: &mut AppState, area: Rect) {
         app.widget_rects.insert(WidgetId::ShopPack(i), item_rect);
     }
 
-    render_voucher_for_sale(f, app, area, packs.len());
+    render_voucher_for_sale(f, app, area, packs.len(), app.game.shop.voucher);
+    // The Voucher Tag adds a second offer right after the first.
+    render_voucher_for_sale(
+        f,
+        app,
+        area,
+        packs.len() + 1,
+        app.game.shop.voucher_tag_offer,
+    );
 }
 
-/// The ante's voucher offer, sharing the booster-pack row. It sits one
-/// slot past the packs and is selected as the last cursor position of the
-/// ShopPacks zone.
-fn render_voucher_for_sale(f: &mut Frame, app: &mut AppState, area: Rect, slot: usize) {
-    let Some(voucher) = app.game.shop.voucher else {
+/// A voucher offer, sharing the booster-pack row. It sits after the packs
+/// and is selected as the last cursor positions of the ShopPacks zone.
+fn render_voucher_for_sale(
+    f: &mut Frame,
+    app: &mut AppState,
+    area: Rect,
+    slot: usize,
+    voucher: Option<Voucher>,
+) {
+    let Some(voucher) = voucher else {
         return;
     };
     let x = area.x + 1 + slot as u16 * SLOT_W;
@@ -346,7 +360,7 @@ fn render_voucher_for_sale(f: &mut Frame, app: &mut AppState, area: Rect, slot: 
 
     let para = Paragraph::new(Text::from(lines)).block(block);
     f.render_widget(para, item_rect);
-    app.widget_rects.insert(WidgetId::ShopVoucher, item_rect);
+    app.widget_rects.insert(WidgetId::ShopVoucher(slot), item_rect);
 }
 
 fn render_reroll(f: &mut Frame, app: &mut AppState, area: Rect) {
