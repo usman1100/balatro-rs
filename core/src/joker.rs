@@ -2103,6 +2103,28 @@ mod tests {
         ]
     }
 
+    /// The whitelist is complete, and this is what keeps it that way.
+    ///
+    /// `test_joker_implementation_count_is_tracked` pins a constant, which a
+    /// future joker can satisfy by bumping the number rather than by landing
+    /// the behaviour. This asserts the other direction: no joker is left out.
+    #[test]
+    fn test_no_joker_is_left_unimplemented() {
+        let missing: Vec<String> = Jokers::iter()
+            .filter(|j| !j.is_implemented())
+            .map(|j| j.name().to_string())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these jokers have no behavior and must not be generated: {missing:?}"
+        );
+        assert_eq!(
+            Jokers::iter().filter(|j| j.is_implemented()).count(),
+            Jokers::iter().count(),
+            "every joker in the enum is implemented"
+        );
+    }
+
     #[test]
     fn test_jokers_by_rarity_never_returns_unimplemented() {
         for rarity in [

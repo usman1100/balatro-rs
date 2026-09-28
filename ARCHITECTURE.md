@@ -178,10 +178,21 @@ edition bonus must sandwich each joker's own contribution.
 were removed rather than implemented — see [Effects](#effects) below for why
 every joker that wanted them is already covered.
 
-`is_implemented()` (`core/src/joker.rs:806`) is an explicit whitelist, and it is
-the only thing keeping a joker whose effects are missing out of shops and packs.
-A joker can therefore be fully data-complete and still be unplayable — that is
-the current state of 76 of the 150.
+`is_implemented()` is an explicit whitelist, and it is the only thing keeping a
+joker whose effects are missing out of shops and packs. A joker can therefore
+be fully data-complete and still be unplayable.
+
+The whitelist is now complete: all 150 jokers are in it. It is kept as a
+whitelist rather than derived because a joker's behaviour can live in a
+hand-rolled hook — `Game::joker_first_hand`, `joker_pack_opened`,
+`joker_blind_start`, `shop_end_effects` — where `effects()` returns nothing at
+all, and there is no way to see that from the enum.
+
+Two tests keep that honest. `test_joker_implementation_count_is_tracked` pins
+the count against a constant, so landing a joker without updating the number
+fails. `test_every_registered_effect_has_a_firing_site` walks all 150 and
+fails if one registers an effect the game never reads, which is the other way
+a joker can silently do nothing.
 
 ## Scoring pipeline
 

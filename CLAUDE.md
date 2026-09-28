@@ -45,7 +45,14 @@ cargo build -p balatro-rs --features python
 
 Implemented: poker hand scoring, playing/discarding/reordering cards, blind progression (small/big/boss), ante progression (1-8), money/interest, all 15 deck variants and all 8 stakes, buying/selling jokers, tarots, planets, spectrals, card enhancements/editions/seals in effect, all 24 tags, all 28 boss blind modifiers, all 32 vouchers. All 150 jokers have real behavior.
 
-Not implemented: sticker behavior (eternal/perishable/rental are data only, so the Black/Orange/Gold stakes have no visible effect), the Erratic Deck's per-card randomization is a deterministic reshuffle rather than the real per-card draw, and the remaining 2 jokers. `DeckVariant` and `Stake` are plumbed through `Config` and applied; see `deck_variant.rs`. `DeckVariant` and `Stake` are plumbed through `Config` and applied; see `core/src/deck_variant.rs`. The Black/Orange/Gold stakes still have no visible effect because stickers are data-only, and the Erratic Deck reshuffles ranks and suits rather than drawing them per card as the real game does. `Effects::OnPlay` and `Effects::OnHandRank` were removed: no joker produced either and nothing fired them. `joker.rs::test_every_registered_effect_has_a_firing_site` now keeps the remaining variants honest.
+Not implemented: sticker behavior (eternal/perishable/rental are data only, so the
+Black/Orange/Gold stakes have no visible effect) and the Erratic Deck's per-card
+randomization, which is a deterministic reshuffle rather than the real per-card
+draw. `DeckVariant` and `Stake` are plumbed through `Config` and applied; see
+`core/src/deck_variant.rs`. `Effects::OnPlay` and `Effects::OnHandRank` were
+removed: no joker produced either and nothing fired them.
+`joker.rs::test_every_registered_effect_has_a_firing_site` now keeps the remaining
+variants honest.
 
 Partial hands, face-down cards and the four partial-hand jokers (Splash, Four Fingers, Shortcut, Smeared Joker) are all implemented. Every joker now has real behaviour; Perkeo works because `Consumable` carries an `Edition`.
 
