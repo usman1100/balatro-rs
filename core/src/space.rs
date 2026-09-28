@@ -693,8 +693,13 @@ impl From<Config> for ActionSpace {
     fn from(c: Config) -> Self {
         ActionSpace {
             select_card: vec![0; c.available_max],
-            move_card_left: vec![0; c.available_max - 1], // every card but leftmost can move left
-            move_card_right: vec![0; c.available_max - 1], // every card but rightmost can move right
+            // `saturating_sub`: a zero-card hand has no card that can move
+            // left or right, and `0 - 1` underflowed and panicked. A config
+            // with `available_max: 0` is degenerate but must not crash.
+            // Every card but the leftmost can move left, and every card but
+            // the rightmost can move right.
+            move_card_left: vec![0; c.available_max.saturating_sub(1)],
+            move_card_right: vec![0; c.available_max.saturating_sub(1)],
             play: vec![0; 1],
             discard: vec![0; 1],
             cash_out: vec![0; 1],
@@ -908,6 +913,54 @@ mod tests {
 
     fn shop_stages() -> [crate::stage::Stage; 2] {
         [crate::stage::Stage::Shop(), crate::stage::Stage::PreBlind()]
+    }
+
+    /// A degenerate config must produce a usable space rather than a panic.
+    /// `vec![0; n - 1]` underflowed when the hand size was zero, and a
+    /// caller setting `available_max: 0` — or a future default change — would
+    /// have taken the whole engine down in `gen_action_space`.
+    #[test]
+    fn test_a_zero_card_hand_does_not_panic() {
+        for available_max in [0usize, 1, 2] {
+            let a = ActionSpace::from(Config {
+                available: available_max,
+                available_max,
+                ..Config::default()
+            });
+            assert_eq!(
+                a.select_card.len(),
+                available_max,
+                "one select slot per card"
+            );
+            assert_eq!(
+                a.move_card_left.len(),
+                available_max.saturating_sub(1),
+                "no leftmost card can move left"
+            );
+            assert_eq!(
+                a.move_card_right.len(),
+                available_max.saturating_sub(1),
+                "no rightmost card can move right"
+            );
+            assert_eq!(a.size(), a.to_vec().len(), "size matches the vector");
+        }
+    }
+
+    /// The same for a game driven end to end, since `gen_action_space` is
+    /// what every caller goes through first.
+    #[test]
+    fn test_a_zero_card_hand_plays() {
+        let mut g = Game::new(crate::config::Config {
+            available: 0,
+            available_max: 0,
+            ..Config::default()
+        });
+        g.start();
+        let space = g.gen_action_space();
+        assert_eq!(space.to_vec().len(), space.size());
+        // No card actions, but the blind can still be selected.
+        assert_eq!(space.select_card.len(), 0);
+        assert_eq!(space.move_card_left.len(), 0);
     }
 
     #[test]

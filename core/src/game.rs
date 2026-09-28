@@ -1728,7 +1728,11 @@ impl Game {
         match self.blind {
             None => base,
             Some(Blind::Small) => base,
-            Some(Blind::Big) => (base as f32 * 1.5) as usize,
+            // Integer, not `(base as f32 * 1.5) as usize`. The float route
+            // loses precision above 2^24 and is exact only by luck below it;
+            // `base / 2 * 3` is exact for every value that fits in a `usize`
+            // under twice that, and rounds the same way the real game does.
+            Some(Blind::Big) => base / 2 * 3,
             Some(Blind::Boss) => base * Self::boss_score_multiplier(self.active_boss()),
         }
     }
@@ -3995,8 +3999,26 @@ mod tests {
         };
         // required_score() reflects the *current* blind (Big), not Boss -
         // boss_required_score() previews the upcoming Boss's number instead.
-        assert_eq!(g.required_score(), (300f32 * 1.5) as usize);
-        assert_eq!(g.boss_required_score(), 300 * 4);
+        // Pinned to the value, not to the expression, so a change of either
+        // formula shows up here rather than agreeing with itself.
+        assert_eq!(g.required_score(), 450);
+        assert_eq!(g.boss_required_score(), 1200);
+
+        // Every ante's Big Blind, to catch a rounding difference.
+        for (ante, base) in [
+            (Ante::One, 300),
+            (Ante::Two, 800),
+            (Ante::Three, 2000),
+            (Ante::Eight, 50000),
+        ] {
+            let g = Game {
+                ante_current: ante,
+                blind: Some(Blind::Big),
+                stage: Stage::Blind(Blind::Big),
+                ..Default::default()
+            };
+            assert_eq!(g.required_score(), base / 2 * 3, "ante {ante:?}");
+        }
     }
 
     // --- Group C: hand-level chip/mult halving (Flint) ---

@@ -384,6 +384,20 @@ mod tests {
         );
     }
 
+    /// `randweightedchoice` walks `items` until the accumulated weight passes
+    /// the poll, so it assumed the sentinel is exactly the sum of the rest. A
+    /// floating-point shortfall would have run the index off the end. The
+    /// loop is now clamped, but the invariant is still worth asserting: it is
+    /// the thing the clamp is a fallback *for*, and a table that violates it
+    /// would be biased rather than merely unsafe.
+    #[test]
+    fn pack_weights_are_all_positive() {
+        for (name, weight) in &PACKS[1..] {
+            assert!(*weight > 0.0, "{name} has a non-positive weight {weight}");
+        }
+        assert!(PACKS[0].1 > 0.0, "the sentinel weight must be positive");
+    }
+
     #[test]
     fn all_pool_names_resolve() {
         let mut failures: Vec<String> = Vec::new();

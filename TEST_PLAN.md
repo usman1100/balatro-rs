@@ -145,13 +145,20 @@ evaluator cannot classify; it is checked, but there is no gameplay path.
 
 ## Tier 5 — arithmetic
 
-- `game.rs:1698` `chips * mult` unchecked (0.7).
-- `game.rs:1854` Economy unclamped (0.3).
-- `space.rs:110,134,142` `len() - 1` panics if `available_max == 0`; untested.
-- `instance.rs:140,108` and `draws.rs:22` index-out-of-bounds on an empty
-  pool or an unpaired voucher.
-- `game.rs:1712` Big Blind's 1.5x via `f32`; the test restates the
-  implementation rather than pinning a value.
+- DONE: `chips * mult` saturates (0.7), Economy clamps (0.3).
+- DONE: `available_max: 0` no longer underflows `vec![0; n - 1]` in
+  `ActionSpace::from`. A zero-card hand is degenerate but a caller setting it
+  — or a future default change — used to panic in `gen_action_space`, which
+  is the first thing every caller does.
+- DONE: `randchoice` on an empty pool returns the resample sentinel rather
+  than panicking on `randint(0, -1)`, and `randweightedchoice` no longer runs
+  off the end when the sentinel weight falls short of the sum. Both verified
+  to catch their panics when the guards are removed.
+- Still open: `voucher_upgrade`'s `VOUCHERS[idx + 1]` pairing, which relies on
+  32 hand-maintained names being in upgrade order. Add one unpaired voucher
+  and it panics; swap two and it silently returns the wrong upgrade.
+- DONE: the Big Blind's 1.5x is integer rather than `f32`, and the test pins
+  the value instead of restating the expression it replaced.
 
 ## Tier 6 — process
 

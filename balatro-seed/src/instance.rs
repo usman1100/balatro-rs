@@ -102,6 +102,16 @@ impl Instance {
     /// asymmetry: the resample loop's exit check ignores `showman`.
     pub(crate) fn randchoice<'a>(&mut self, id: NodeId, items: &[&'a str]) -> &'a str {
         let id = id.to_string();
+        // An empty pool would make `randint(0, -1)` and then index out of
+        // bounds, which is a panic with an arithmetic explanation rather than
+        // a diagnosis. Only `next_boss` guarded against this; the check
+        // belongs here so every caller is safe rather than the ones someone
+        // remembered to wrap. Returning the sentinel is what the real game
+        // does for an exhausted pool, and the lock table treats it as a
+        // resample.
+        if items.is_empty() {
+            return "RETRY";
+        }
         let node = self.get_node(&id);
         let mut rng = LuaRandom::new(node);
         let item = items[rng.randint(0, items.len() as i32 - 1) as usize];
@@ -129,12 +139,24 @@ impl Instance {
         id: NodeId,
         items: &[(&'a str, f64)],
     ) -> &'a str {
+        // `items[0]` is the sentinel carrying the total weight, so a table
+        // with fewer than two entries has no real candidate to return. The
+        // loop below also assumed the sentinel is exactly the sum of the
+        // rest, so a floating-point shortfall would run `idx` off the end;
+        // clamping to the last entry is the same answer that shortfall
+        // would have given, without the panic.
+        if items.len() < 2 {
+            return items
+                .first()
+                .map(|(name, _)| *name)
+                .expect("randweightedchoice called with an empty table");
+        }
         let node = self.get_node(&id.to_string());
         let mut rng = LuaRandom::new(node);
         let poll = rng.random() * items[0].1;
         let mut idx = 1usize;
         let mut weight = 0.0;
-        while weight < poll {
+        while weight < poll && idx < items.len() {
             weight += items[idx].1;
             idx += 1;
         }
@@ -261,5 +283,46 @@ mod tests {
         assert!(inst.is_locked("X"));
         inst.unlock("X");
         assert!(!inst.is_locked("X"));
+    }
+
+    /// `randchoice` indexed `items[0]` unconditionally, so an empty pool
+    /// gave `randint(0, -1)` and then a panic. Only `next_boss` guarded
+    /// against this; the guard now lives in the helper, so every caller is
+    /// safe rather than the ones someone remembered.
+    #[test]
+    fn randchoice_survives_an_empty_pool() {
+        let mut inst = Instance::new("TEST");
+        assert_eq!(
+            inst.randchoice(NodeId::Custom("empty"), &[]),
+            "RETRY",
+            "an exhausted pool is a resample, not an index panic"
+        );
+    }
+
+    /// `randweightedchoice` walked past the end of the table if the sentinel
+    /// weight was even slightly short of the sum of the rest. Clamped now,
+    /// and this checks the clamp rather than the invariant the clamp is a
+    /// fallback for.
+    #[test]
+    fn randweightedchoice_survives_a_short_sentinel() {
+        let mut inst = Instance::new("TEST");
+        // The sentinel claims 1000 but the real entries sum to 2, so the
+        // poll can land past every candidate.
+        let items = [("sum", 1000.0), ("a", 1.0), ("b", 1.0)];
+        for _ in 0..50 {
+            let pick = inst.randweightedchoice(NodeId::Custom("short"), &items);
+            assert!(pick == "a" || pick == "b", "returned a sentinel {pick}");
+        }
+    }
+
+    /// A table with only a sentinel has no real candidate, and must not walk
+    /// off the end looking for one.
+    #[test]
+    fn randweightedchoice_survives_a_sentinel_only_table() {
+        let mut inst = Instance::new("TEST");
+        assert_eq!(
+            inst.randweightedchoice(NodeId::Custom("sent"), &[("sum", 5.0)]),
+            "sum"
+        );
     }
 }
