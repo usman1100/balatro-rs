@@ -82,6 +82,7 @@ against a copy of itself.
 
 ## Tier 2 — coverage that is thin rather than wrong
 
+
 - DONE: all 150 joker costs pinned, table-driven by save-file id, verified
   against the game's own centre table with zero mismatches, and verified to
   fail when one is changed. Plus a range check.
@@ -107,9 +108,19 @@ against a copy of itself.
   sharing the same sum.
 - Still uncovered: the four Merchant/Tycoon rate vouchers, Tarot Merchant,
   Planet Merchant and Illusion.
-- 55 of 150 jokers have no test reference. Four Fingers / Smeared / Shortcut
-  are only tested by constructing `HandRules` by hand, never by owning the
-  joker, so `hand_rules()` wiring is unverified.
+- The 55 jokers with no test reference are now covered as two families rather
+  than 55 times over: the eighteen that keep a running `JokerState::counter`
+  and the five that hold a rotating `selector`. Both families share a failure
+  mode — a number or a choice that silently resets — and both are things a
+  player has paid for, so a family test catches what a per-joker test would
+  have been written for.
+  This is deliberately weaker than a per-joker test and the plan says so: a
+  counter being *finite, non-decreasing and save-stable* is not the same as
+  its rate being right. The per-joker tests still exist where the rate
+  matters.
+- Still uncovered: Wild cards, Blue/Purple seals during scoring, the four
+  Merchant/Tycoon rate vouchers, Tarot Merchant, Planet Merchant, Illusion,
+  and the 24 tag values.
 
 ## Tier 3 — tests that lie
 

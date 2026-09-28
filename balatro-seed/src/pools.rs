@@ -397,7 +397,7 @@ mod tests {
     /// and a swapped pair would return the wrong upgrade while still
     /// looking fine.
     #[test]
-    fn VOUCHERS_are_paired_upgrades() {
+    fn vouchers_are_paired_upgrades() {
         assert_eq!(
             VOUCHERS.len() % 2,
             0,

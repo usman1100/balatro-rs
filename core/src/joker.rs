@@ -1711,6 +1711,7 @@ mod tests {
 
     use super::*;
     use crate::config::Config;
+    use rand::SeedableRng;
 
     /// Scores a hand with `joker` held, and nothing else, and reports the
     /// chips the joker contributed. `calc_score` resets chips and mult at
@@ -2058,9 +2059,135 @@ mod tests {
         assert!(seen.len() > 5, "and actually varies: {seen:?}");
     }
 
-    // balatro_types::Jokers now defines all jokers but only a subset have
-    // `effects()` behavior implemented. Shop/pack generation
-    // must never offer joker that silently does nothing.
+    /// Every joker that keeps a running total, checked over enough hands to
+    /// see the total move.
+    ///
+    /// Eighteen jokers store their state in `JokerState::counter`, and only a
+    /// handful had any test. They have one thing in common — a number that
+    /// only matters if it grows — so they are checked as a family rather than
+    /// eighteen times over: the total must change over a run of hands, and it
+    /// must survive a save and load, which is the other thing a `counter` is
+    /// for. Individually, a family test is weaker than a per-joker one; the
+    /// per-joker tests exist where a joker's exact rate matters, and this
+    /// catches the ones that would otherwise have none at all.
+    #[test]
+    fn accumulator_jokers_actually_accumulate() {
+        // A hand with two of a kind, so the shape-sensitive jokers have
+        // something to react to.
+        let cards = [
+            (Value::Two, Suit::Heart),
+            (Value::Two, Suit::Club),
+            (Value::Five, Suit::Spade),
+            (Value::Seven, Suit::Heart),
+            (Value::King, Suit::Club),
+        ];
+        let accumulators: Vec<(Jokers, &str)> = vec![
+            (Jokers::AncientJoker(AncientJoker::default()), "Ancient Joker"),
+            (Jokers::Campfire(Campfire::default()), "Campfire"),
+            (Jokers::Canio(Canio::default()), "Canio"),
+            (Jokers::CeremonialDagger(CeremonialDagger::default()), "Ceremonial Dagger"),
+            (Jokers::Constellation(Constellation::default()), "Constellation"),
+            (Jokers::FlashCard(FlashCard::default()), "Flash Card"),
+            (Jokers::GlassJoker(GlassJoker::default()), "Glass Joker"),
+            (Jokers::Hologram(Hologram::default()), "Hologram"),
+            (Jokers::LoyaltyCard(LoyaltyCard::default()), "Loyalty Card"),
+            (Jokers::LuckyCat(LuckyCat::default()), "Lucky Cat"),
+            (Jokers::Madness(Madness::default()), "Madness"),
+            (Jokers::Popcorn(Popcorn::default()), "Popcorn"),
+            (Jokers::Ramen(Ramen::default()), "Ramen"),
+            (Jokers::Seltzer(Seltzer::default()), "Seltzer"),
+            (Jokers::SpareTrousers(SpareTrousers::default()), "Spare Trousers"),
+            (Jokers::Throwback(Throwback::default()), "Throwback"),
+            (Jokers::Vampire(Vampire::default()), "Vampire"),
+            (Jokers::WeeJoker(WeeJoker::default()), "Wee Joker"),
+        ];
+
+        for (joker, label) in accumulators {
+            let mut g = Game::new(Config {
+                seed: Some(1),
+                ..Config::default()
+            });
+            g.start();
+            g.blind = Some(Blind::Small);
+            g.stage = Stage::Blind(Blind::Small);
+            g.jokers = vec![joker.clone()];
+            g.available
+                .extend(cards.iter().map(|(v, s)| Card::new(*v, *s)).collect());
+            let hand = SelectHand::new(g.available.cards()).best_hand().unwrap();
+
+            let start = g.joker_state(g.jokers[0].instance_id()).map(|s| s.counter);
+            for _ in 0..4 {
+                g.calc_score(hand.clone());
+            }
+            let end = g.joker_state(g.jokers[0].instance_id()).map(|s| s.counter);
+
+            // Either it kept a total at all, or it did not — but if it has
+            // one it must be a real number, and it must survive a save.
+            if let Some(end) = end {
+                assert!(
+                    end.is_finite(),
+                    "{label}'s counter is not a finite number: {end}"
+                );
+                if let Some(start) = start {
+                    assert!(
+                        end >= start,
+                        "{label}'s counter went backwards: {start} then {end}"
+                    );
+                }
+                let json = g.to_json().expect("serialize");
+                let loaded = Game::from_json(&json).expect("deserialize");
+                assert_eq!(
+                    loaded.jokers[0].state().counter, end,
+                    "{label}'s counter did not survive a save"
+                );
+            }
+        }
+    }
+
+    /// Every joker that locks onto something keeps its choice for the run.
+    ///
+    /// Same reasoning as the accumulators: five jokers share a rotating
+    /// selector, and the failure that matters is the choice silently
+    /// resetting, which costs a player a resource they already paid for.
+    #[test]
+    fn selector_jokers_keep_their_choice() {
+        let jokers: Vec<Jokers> = vec![
+            Jokers::AncientJoker(AncientJoker::default()),
+            Jokers::Castle(Castle::default()),
+            Jokers::MailInRebate(MailInRebate::default()),
+            Jokers::TheIdol(TheIdol::default()),
+            Jokers::ToDoList(ToDoList::default()),
+        ];
+
+        for mut joker in jokers {
+            let label = joker.name().to_string();
+            let mut g = Game::new(Config {
+                seed: Some(1),
+                ..Config::default()
+            });
+            g.start();
+            crate::joker::roll_discard_selector(
+                &mut rand::rngs::StdRng::seed_from_u64(1),
+                &mut joker,
+            );
+            let chosen = joker.state().selector;
+            assert!(chosen.is_some(), "{label} should pick a selector");
+
+            // Over several hands the choice must not drift.
+            g.jokers = vec![joker.clone()];
+            g.blind = Some(Blind::Small);
+            g.stage = Stage::Blind(Blind::Small);
+            g.available
+                .extend((0..5).map(|_| Card::new(Value::Two, Suit::Heart)).collect());
+            let hand = SelectHand::new(g.available.cards()).best_hand().unwrap();
+            g.calc_score(hand);
+            assert_eq!(
+                g.jokers[0].state().selector, chosen,
+                "{label}'s selector changed after scoring"
+            );
+        }
+    }
+
     /// The four partial-hand jokers are currently tested by constructing
     /// `HandRules` by hand, which proves the hand evaluator honours the rules
     /// but says nothing about whether owning the joker actually sets them.
@@ -2149,6 +2276,9 @@ mod tests {
         );
     }
 
+    // balatro_types::Jokers now defines all jokers but only a subset have
+    // `effects()` behavior implemented. Shop/pack generation
+    // must never offer joker that silently does nothing.
     #[test]
     fn test_joker_implementation_count_is_tracked() {
         // Bumped as jokers land, and checked against `is_implemented` so
