@@ -82,9 +82,16 @@ against a copy of itself.
 
 ## Tier 2 — coverage that is thin rather than wrong
 
-- 8 of 12 hand `level_step` values unpinned; all 150 joker costs unpinned;
-  most tarot/planet/spectral/tag/voucher costs unpinned. One test per
-  table, mirroring `deck_variant.rs:289`.
+- DONE: all 150 joker costs pinned, table-driven by save-file id, verified
+  against the game's own centre table with zero mismatches, and verified to
+  fail when one is changed. Plus a range check.
+- DONE: all 12 scoring hands' level-1 base and per-level step pinned. The
+  base values come from the wiki's own "Base Scoring" column and agree with
+  the game; the steps are the hand table's `l_chips`/`l_mult`.
+- Consumable prices pinned (uniform per type, plus the Negative bump).
+- Still unpinned: all 24 tag values, 32 voucher costs (one derivable), 15
+  deck starting contents (three covered), 6 pack costs (three covered),
+  and the `balatro-seed` pool contents and weights beyond the name check.
 - `BossBlind::Fish` is the only boss with no test reference — and it holds
   0.2.
 - Lucky enhancement, Wild, Negative-as-a-played-card, Blue/Purple seals during
