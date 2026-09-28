@@ -19,15 +19,16 @@ pub(crate) fn joker_lines(joker: &Jokers, w: u16) -> Vec<Line<'static>> {
     let desc = joker.desc();
     let edition = joker.edition();
     let stickers = joker.stickers();
-    let mut sticker_flags = Vec::new();
+    let mut sticker_flags: Vec<String> = Vec::new();
     if stickers.eternal {
-        sticker_flags.push("Eternal");
+        sticker_flags.push("Eternal".to_string());
     }
     if stickers.perishable {
-        sticker_flags.push("Perishable");
+        // The remaining lifetime is the whole point of the sticker.
+        sticker_flags.push(format!("Perishable ({})", stickers.perish_tally));
     }
     if stickers.rental {
-        sticker_flags.push("Rental");
+        sticker_flags.push("Rental".to_string());
     }
 
     let mut lines = vec![

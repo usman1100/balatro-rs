@@ -110,7 +110,7 @@ fn item_info(app: &AppState, slot: ShopSlot, w: u16) -> Option<(String, usize, V
             let joker = app.game.shop.jokers.get(idx)?;
             Some((
                 format!(" {} ", joker.name()),
-                app.game.price(joker.cost()),
+                app.game.joker_price(joker),
                 joker_lines(joker, w),
             ))
         }

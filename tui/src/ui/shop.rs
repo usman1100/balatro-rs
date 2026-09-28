@@ -92,7 +92,7 @@ fn render_jokers_for_sale(f: &mut Frame, app: &mut AppState, area: Rect) {
             break;
         }
         let is_cursor = focused && app.cursor == i;
-        let price = app.game.price(joker.cost());
+        let price = app.game.joker_price(joker);
         let can_afford = app.game.can_afford(price);
         render_price_tag(f, x, area.y, price, can_afford);
 

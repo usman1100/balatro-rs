@@ -43,6 +43,11 @@ pub struct Stickers {
     pub eternal: bool,
     pub perishable: bool,
     pub rental: bool,
+    /// Rounds a Perishable joker has left. The real game stores this on the
+    /// card's ability as `perish_tally`; it starts at
+    /// `G.GAME.perishable_rounds` and reaches 0 as the joker ages.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub perish_tally: i32,
 }
 
 /// A rotating-selector value some jokers (MailInRebate, Castle, AncientJoker,
@@ -371,8 +376,12 @@ macro_rules! joker_data {
             pub fn desc(&self) -> &'static str {
                 match self { $(Self::$variant(_) => $desc,)* }
             }
+            /// `max(1, floor(cost / 2)) + extra_value`, which the real game
+            /// computes from the *final* cost. A Rental joker therefore sells
+            /// for 1, not half its usual price.
             pub fn sell_value(&self) -> usize {
-                std::cmp::max(1, self.cost() / 2) + self.sell_bonus()
+                let cost = if self.stickers().rental { 1 } else { self.cost() };
+                std::cmp::max(1, cost / 2) + self.sell_bonus()
             }
         }
     };

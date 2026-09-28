@@ -30,6 +30,7 @@ pub mod score;
 pub mod shop;
 pub mod space;
 pub mod spectral;
+pub mod sticker;
 pub mod stage;
 pub mod tag;
 pub mod tarot;

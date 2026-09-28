@@ -278,7 +278,12 @@ impl Game {
         if self.jokers.is_empty() {
             return None;
         }
-        let actions: Vec<Action> = (0..self.jokers.len()).map(Action::SellJoker).collect();
+        // An Eternal joker cannot be sold, so offering the move would hand
+        // the caller an action that always fails.
+        let actions: Vec<Action> = (0..self.jokers.len())
+            .filter(|i| crate::sticker::can_sell(&self.jokers[*i].stickers()))
+            .map(Action::SellJoker)
+            .collect();
         Some(actions.into_iter())
     }
 

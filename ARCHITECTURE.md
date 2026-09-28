@@ -243,12 +243,31 @@ multiplying one. `deck_variant::ante_base` transcribes all three from
 `get_blind_amount`; `effective_scaling` takes the higher of the deck's and the
 stake's, since both write the same field.
 
-**What the deck and stake do *not* change.** The Black, Orange and Gold stakes
-enable eternal, perishable and rental stickers, and stickers are data-only in
-`core`, so those three stakes currently have no effect. The Erratic Deck
-randomises each card's rank and suit individually; the implementation reshuffles
-the existing values across the 52 cards instead, which is indistinguishable
-once the deck is shuffled but is not the real per-card draw. Both are noted in
+**Stickers are what the upper stakes do.** The Black, Orange and Gold stakes
+enable eternal, perishable and rental stickers, which `core/src/sticker.rs`
+implements. Two details are easy to get wrong:
+
+The eternal/perishable roll is a *single* roll with three outcomes — `> 0.7`
+Eternal, `(0.4, 0.7]` Perishable, otherwise neither — so the two are mutually
+exclusive by construction and each is 30% with 40% clean. Rental is a
+separate roll and does stack with either. The per-joker compat flags matter
+too: `set_eternal` and `set_perishable` each refuse when the joker is not
+compatible for that sticker, and each refuses when the other is already set, so
+an incompatible joker ends up with nothing rather than the wrong sticker.
+
+An expired Perishable is **debuffed, not removed**. The joker keeps its slot
+and its sell value and still counts for Gift Card, Swashbuckler and
+Temperance; it just stops contributing. That is why nothing drops it at
+expiry and `is_joker_debuffed` reads the tally instead.
+
+A Rental's charge is applied in `calc_reward`, before the payout, so it can
+reduce the interest earned on the round — the wiki is explicit about that
+and it is why the charge is not in the round-end tick.
+
+**What the deck and stake still do not change.** The Erratic Deck randomises
+each card's rank and suit individually; the implementation reshuffles the
+existing values across the 52 cards instead, which is indistinguishable once
+the deck is shuffled but is not the real per-card draw. It is noted in
 `CLAUDE.md` rather than left to be discovered.
 
 ## Coverage
@@ -257,6 +276,7 @@ Behaviour implemented in `core`:
 
 - hand identification and scoring, all 13 ranks
 - all 15 deck variants and all 8 stakes
+- the three in-run stickers (eternal, perishable, rental)
 - play / discard / reorder / sort
 - blind and ante progression, win and loss
 - money, interest, rewards

@@ -749,6 +749,18 @@ impl Game {
         self.vouchers.discounted(cost)
     }
 
+    /// What a shop joker actually costs, including a Rental joker's flat $1.
+    /// A Rental price is applied after discounts, so it does not go through
+    /// `price` — the UIs must use this rather than `price(joker.cost())` or
+    /// they will show the pre-rental price.
+    pub fn joker_price(&self, joker: &Jokers) -> usize {
+        if joker.stickers().rental {
+            crate::sticker::RENTAL_COST
+        } else {
+            self.price(joker.cost())
+        }
+    }
+
     /// Money available to spend, which is the balance less any debt
     /// allowance. Non-negative by construction, so every affordability
     /// check downstream can stay a plain `usize` comparison. With no Credit
@@ -801,6 +813,7 @@ impl Game {
             vouchers,
             prob_mult: self.prob_mult(),
             ante: self.ante_current as i32,
+            stake: self.config.stake,
             most_played: self.most_played_hand_rank(),
         }
     }
@@ -816,6 +829,7 @@ impl Game {
                 f.lock().unwrap()(self)
             }
         }
+        self.sticker_round_end();
 
         let planetarium = self.planetarium.clone();
         for card in self.available.not_selected() {
@@ -823,6 +837,26 @@ impl Game {
                 let planet = self.backend.roll_random_planet(&planetarium, &[]);
                 self.consumables.push(planet);
             }
+        }
+    }
+
+    /// Perishable and Rental both tick once per finished round.
+    ///
+    /// Transcribed from `Card:calculate_perishable` and
+    /// `Card:calculate_rental`. A Perishable reaching 0 becomes *debuffed*,
+    /// not removed: the joker stays in the row and still counts for Gift
+    /// Card, Swashbuckler and Temperance, it just stops contributing. That is
+    /// why nothing is dropped here and `is_joker_debuffed` reads the tally.
+    fn sticker_round_end(&mut self) {
+        // The Rental charge is applied in `calc_reward`, before the payout,
+        // so that it can reduce the interest earned on the round. Only the
+        // Perishable tally moves here.
+        for joker in self.jokers.iter_mut() {
+            let mut stickers = joker.stickers();
+            if stickers.perishable && stickers.perish_tally > 0 {
+                stickers.perish_tally -= 1;
+            }
+            joker.set_stickers(stickers);
         }
     }
 
@@ -1057,9 +1091,14 @@ impl Game {
             .jokers
             .iter()
             .filter(|j| {
-                previous
-                    .as_ref()
-                    .is_none_or(|d| d.instance_id() != j.instance_id())
+                // Eternal jokers cannot be debuffed, and neither can jokers
+                // that are already debuffed by an expired Perishable, so
+                // neither is a valid target.
+                !j.stickers().eternal
+                    && !crate::sticker::is_debuffed_for_expired_perishable(&j.stickers())
+                    && previous
+                        .as_ref()
+                        .is_none_or(|d| d.instance_id() != j.instance_id())
             })
             .cloned()
             .collect();
@@ -1302,6 +1341,18 @@ impl Game {
 
     /// Whether a Joker is currently debuffed by The Crimson Heart.
     pub fn is_joker_debuffed(&self, joker: &Jokers) -> bool {
+        let stickers = joker.stickers();
+        // An Eternal joker is never debuffed: `Card:set_debuff` in the real
+        // game is reached only for a joker that can lose its ability, and
+        // Eternal is the sticker that says it cannot.
+        if stickers.eternal {
+            return false;
+        }
+        // An expired Perishable is debuffed rather than removed, so the
+        // joker keeps its slot and its sell value while contributing nothing.
+        if crate::sticker::is_debuffed_for_expired_perishable(&stickers) {
+            return true;
+        }
         self.boss_state
             .debuffed_joker
             .as_ref()
@@ -1590,6 +1641,12 @@ impl Game {
         // effects recomputed per joker, not read from EffectRegistry. Each joker's edition
         // bonus must sandwich its own OnScore closures in self.jokers order.
         for joker in self.jokers.clone() {
+            // A debuffed joker contributes neither its own effect nor its
+            // edition bonus. A boss debuff and an expired Perishable both land
+            // here; an Eternal joker is never debuffed so always passes.
+            if self.is_joker_debuffed(&joker) {
+                continue;
+            }
             let chips_before = self.chips;
             let mult_before = self.mult;
             match joker.edition() {
@@ -1688,7 +1745,27 @@ impl Game {
     }
 
     fn calc_reward(&mut self, blind: Blind) -> Result<usize, GameError> {
+        // A Rental charge is deducted before the payout, so it can lower the
+        // interest earned on the round. The sticker round end that normally
+        // applies the charge has not run yet at this point in the round, so
+        // it is applied here as well and the later tick is skipped for the
+        // round just finished.
+        self.charge_rentals();
         Ok(self.calc_reward_for(blind))
+    }
+
+    /// The $3-per-Rental charge, as a separate step from the tally tick so
+    /// `calc_reward` can call it before the payout.
+    fn charge_rentals(&mut self) {
+        let charge: i64 = self
+            .jokers
+            .iter()
+            .filter(|j| j.stickers().rental)
+            .count() as i64
+            * crate::sticker::RENTAL_RATE;
+        if charge > 0 {
+            self.money = (self.money - charge).max(self.debt_floor());
+        }
     }
 
     fn calc_reward_for(&self, blind: Blind) -> usize {
@@ -1940,6 +2017,10 @@ impl Game {
         if idx >= self.jokers.len() {
             return Err(GameError::InvalidAction);
         }
+        // An Eternal joker cannot be sold at all.
+        if !crate::sticker::can_sell(&self.jokers[idx].stickers()) {
+            return Err(GameError::InvalidAction);
+        }
         self.money += self.jokers[idx].sell_value() as i64;
         let sold = self.jokers.remove(idx);
         for e in sold.effects(self) {
@@ -2015,7 +2096,16 @@ impl Game {
             .position(|j| j.instance_id() == joker.instance_id());
         let free = self.shop.couponed
             || slot.is_some_and(|i| self.shop.free_joker_slots.contains(&i));
-        let cost = if free { 0 } else { self.price(joker.cost()) };
+        // A Rental joker's cost is 1, applied after discounts exactly as
+        // `Card:set_cost` does, so it bypasses `price` entirely rather than
+        // being discounted down.
+        let cost = if free {
+            0
+        } else if joker.stickers().rental {
+            crate::sticker::RENTAL_COST
+        } else {
+            self.price(joker.cost())
+        };
         if !self.can_afford(cost) {
             return Err(GameError::InvalidBalance);
         }
@@ -2597,11 +2687,19 @@ impl Game {
 
     /// Madness: on a small or big blind, gain X0.5 Mult and destroy a
     /// random other Joker. Its Mult is a per-instance counter.
+    ///
+    /// Guarded on actually holding a Madness. Without this it destroyed a
+    /// random joker from every run, which is what let a sticker test lose its
+    /// joker to a joker the player did not own.
     fn madness_blind_start(&mut self, _deck_cards: &[Card]) {
+        if !self.jokers.iter().any(|j| matches!(j, Jokers::Madness(_))) {
+            return;
+        }
+        // An Eternal joker cannot be destroyed by any means.
         let victims: Vec<usize> = self
             .jokers
             .iter()
-            .filter(|j| !matches!(j, Jokers::Madness(_)))
+            .filter(|j| !matches!(j, Jokers::Madness(_)) && !j.stickers().eternal)
             .map(|j| j.instance_id())
             .collect();
         if victims.is_empty() {

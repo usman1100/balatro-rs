@@ -237,11 +237,16 @@ impl RngBackend for FastBackend {
         ];
         let dist = WeightedIndex::new(weights).expect("shop item weights are finite and nonzero");
         match dist.sample(&mut self.rng) {
-            0 => GeneratedItem::Joker(self.joker_gen.gen_joker(
-                ctx.edition_prob_mult(),
-                exclude_jokers,
-                &mut self.rng,
-            )),
+            0 => {
+                let mut joker = self.joker_gen.gen_joker(
+                    ctx.edition_prob_mult(),
+                    exclude_jokers,
+                    &mut self.rng,
+                );
+                let (ep, rental) = ctx.sticker_rolls(&mut self.rng);
+                crate::sticker::roll_stickers(&mut joker, ctx.stake, ep, rental);
+                GeneratedItem::Joker(joker)
+            }
             1 => GeneratedItem::Consumable(
                 self.consumable_gen
                     .gen_tarot_consumable(exclude_tarots, &mut self.rng),
@@ -530,7 +535,12 @@ impl RngBackend for RealBackend {
     ) -> GeneratedItem {
         match self.instance.next_shop_item(ctx.ante) {
             balatro_seed::ShopItem::Joker(j) => {
-                GeneratedItem::Joker(seed_joker_with_id(j, &mut self.extra_rng))
+                let mut joker = seed_joker_with_id(j, &mut self.extra_rng);
+                // The real `Instance` does not roll stickers, so the
+                // `etperpoll`/`ssjr` nodes are read here.
+                let (ep, rental) = ctx.sticker_rolls(&mut self.extra_rng);
+                crate::sticker::roll_stickers(&mut joker, ctx.stake, ep, rental);
+                GeneratedItem::Joker(joker)
             }
             balatro_seed::ShopItem::Consumable(c) => GeneratedItem::Consumable(c),
             balatro_seed::ShopItem::PlayingCard => {

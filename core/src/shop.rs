@@ -10,6 +10,7 @@ use crate::rng::{Backend, GeneratedItem, RngBackend};
 use crate::tarot::Tarot;
 use crate::tag::TagState;
 use crate::voucher::{discounted, Voucher, Vouchers};
+use balatro_types::Stake;
 use rand::distributions::WeightedIndex;
 use rand::prelude::*;
 use strum::IntoEnumIterator;
@@ -26,6 +27,8 @@ pub(crate) struct ShopContext<'a> {
     pub vouchers: &'a Vouchers,
     pub prob_mult: u32,
     pub ante: i32,
+    /// The run's stake, which gates which stickers may spawn at all.
+    pub stake: Stake,
     /// Which hand Telescope should guarantee a Planet card for.
     pub most_played: HandRank,
 }
@@ -38,6 +41,15 @@ impl ShopContext<'_> {
     }
 
     /// The slice of the context that pack contents depend on.
+    /// Sticker rolls are per-ante in the real game (`etperpoll{ante}`), so
+    /// this is only read where an ante is in hand.
+    pub(crate) fn sticker_rolls(&self, rng: &mut impl Rng) -> (f64, f64) {
+        (
+            rng.gen::<f64>(),
+            rng.gen::<f64>(),
+        )
+    }
+
     pub(crate) fn pack_inputs(&self) -> PackInputs<'_> {
         PackInputs {
             jokers: self.held_jokers,
@@ -78,6 +90,7 @@ impl<'a> ShopContext<'a> {
             vouchers,
             prob_mult: 1,
             ante,
+            stake: Stake::White,
             most_played: HandRank::HighCard,
         }
     }

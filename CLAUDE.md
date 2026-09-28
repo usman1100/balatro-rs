@@ -43,12 +43,13 @@ cargo build -p balatro-rs --features python
 
 ## What `core`'s game engine does and doesn't implement
 
-Implemented: poker hand scoring, playing/discarding/reordering cards, blind progression (small/big/boss), ante progression (1-8), money/interest, all 15 deck variants and all 8 stakes, buying/selling jokers, tarots, planets, spectrals, card enhancements/editions/seals in effect, all 24 tags, all 28 boss blind modifiers, all 32 vouchers. All 150 jokers have real behavior.
+Implemented: poker hand scoring, playing/discarding/reordering cards, blind progression (small/big/boss), ante progression (1-8), money/interest, all 15 deck variants and all 8 stakes, buying/selling jokers, tarots, planets, spectrals, card enhancements/editions/seals in effect, all 24 tags, all 28 boss blind modifiers, all 32 vouchers, and the three
+in-run stickers. All 150 jokers have real behavior.
 
-Not implemented: sticker behavior (eternal/perishable/rental are data only, so the
-Black/Orange/Gold stakes have no visible effect) and the Erratic Deck's per-card
-randomization, which is a deterministic reshuffle rather than the real per-card
-draw. `DeckVariant` and `Stake` are plumbed through `Config` and applied; see
+Not implemented: the Erratic Deck's per-card randomization, which is a
+deterministic reshuffle rather than the real per-card draw. Stickers (Eternal,
+Perishable, Rental) are implemented end to end in `core/src/sticker.rs`, so the
+Black/Orange/Gold stakes now have a visible effect. `DeckVariant` and `Stake` are plumbed through `Config` and applied; see
 `core/src/deck_variant.rs`. `Effects::OnPlay` and `Effects::OnHandRank` were
 removed: no joker produced either and nothing fired them.
 `joker.rs::test_every_registered_effect_has_a_firing_site` now keeps the remaining
@@ -60,7 +61,9 @@ A Negative consumable is a distinct card from its base version, so equality incl
 
 `Game::money` is an `i64` and can go negative, because Credit Card buys a debt allowance. `Game::bankrupt_at` is the floor — 0 by default, -$20 per Credit Card — and every affordability check goes through `spendable_balance()`, which is `money - bankrupt_at` clamped at zero. Only a purchase can open the allowance; a joker that charges money (Tooth) is clamped to the floor instead.
 
-`core` can drive generation through `balatro-seed` via `RngMode::Real`, but the port is partial. Real: shop items, packs, pack contents, vouchers, tags, bosses, joker/tarot/planet/spectral draws, and effect procs. Still on the simplified `rand_chacha` stream: deck shuffle, Glass Card's shatter roll, gameplay-triggered joker/tarot/planet draws, sticker and shop-playing-card generation. So a real-mode run is not yet byte-accurate end to end. `balatro_seed::NODE_SOURCE_VERSION` records that the effect-proc node IDs were transcribed from a 1.0.0 source dump and are unvalidated.
+`core` can drive generation through `balatro-seed` via `RngMode::Real`, but the port is partial. Real: shop items, packs, pack contents, vouchers, tags, bosses, joker/tarot/planet/spectral draws, and effect procs. Still on the simplified `rand_chacha` stream: deck shuffle, Glass Card's shatter roll, gameplay-triggered joker/tarot/planet draws, and shop-playing-card generation. Sticker rolls use the
+`etperpoll`/`ssjr` thresholds transcribed from the real game but read from the
+`rand_chacha` stream, since `balatro-seed` has no nodes for them. So a real-mode run is not yet byte-accurate end to end. `balatro_seed::NODE_SOURCE_VERSION` records that the effect-proc node IDs were transcribed from a 1.0.0 source dump and are unvalidated.
 
 ## Two public APIs
 

@@ -297,3 +297,43 @@ fn test_every_deck_and_stake_completes_a_run() {
         }
     }
 }
+
+/// Every stake plays a full run, which is what exercises stickers: only
+/// Black and above can produce them, so a stress pass on the default White
+/// Stake would never reach this code.
+#[test]
+fn test_every_stake_completes_a_run_with_stickers_possible() {
+    use rand::{Rng, SeedableRng};
+    for stake in Stake::iter() {
+        for seed in 0..4u64 {
+            let mut g = Game::new(Config {
+                seed: Some(seed),
+                stake,
+                ..Config::default()
+            });
+            g.start();
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            for _ in 0..3000 {
+                if g.is_over() {
+                    break;
+                }
+                let space = g.gen_action_space();
+                let legal: Vec<usize> = space
+                    .to_vec()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| **m == 1)
+                    .map(|(i, _)| i)
+                    .collect();
+                if legal.is_empty() {
+                    break;
+                }
+                let pick = legal[rng.gen_range(0..legal.len())];
+                let action = space.to_action(pick, &g).expect("masked index resolves");
+                if g.handle_action(action).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}

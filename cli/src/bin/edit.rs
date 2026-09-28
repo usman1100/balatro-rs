@@ -6,6 +6,7 @@ use balatro_rs::consumable::Consumable;
 use balatro_rs::deck::Deck;
 use balatro_rs::game::Game;
 use balatro_rs::joker::{Jokers, Stickers};
+use balatro_rs::sticker as crate_sticker;
 use balatro_rs::planet::Planets;
 use balatro_rs::spectral::Spectral;
 use balatro_rs::tarot::Tarot;
@@ -153,11 +154,13 @@ fn main() -> Result<()> {
                 joker.set_edition(edition);
             }
             if eternal || perishable || rental {
-                joker.set_stickers(Stickers {
-                    eternal,
-                    perishable,
-                    rental,
-                });
+                // `set_perishable` is what starts the lifetime tally, so
+                // build through it rather than setting the field directly.
+                let mut stickers = Stickers::default();
+                crate_sticker::set_eternal(&joker, &mut stickers, eternal);
+                crate_sticker::set_perishable(&joker, &mut stickers, perishable);
+                stickers.rental = rental;
+                joker.set_stickers(stickers);
             }
             game.jokers.push(joker);
         }
