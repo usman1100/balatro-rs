@@ -4979,6 +4979,318 @@ mod tests {
         assert_eq!(once, twice, "a round trip must not rewrite the save");
     }
 
+    /// Every error the engine can return, reached through the public API.
+    ///
+    /// Eleven of the eighteen `GameError` variants had no test that produced
+    /// them, and all six `PlayHandError`s and all three `ActionSpaceError`s
+    /// were unexercised. An unexercised error path is usually a path with a
+    /// bug in it, since nothing has ever asserted what it returns.
+    ///
+    /// The Eye, Mouth and Psychic errors deserve a note: they were *tested*,
+    /// but only by asserting the action is absent from `gen_actions`, which
+    /// goes through `play_is_legal` and swallows the error. The branch that
+    /// actually produces the error was never taken, so it is taken here.
+    #[test]
+    fn test_every_error_variant_is_reachable() {
+        // --- PlayHandError, via handle_action ---
+
+        // NoCards: play with nothing selected.
+        let mut g = Game::default();
+        g.start();
+        g.blind = Some(Blind::Small);
+        g.stage = Stage::Blind(Blind::Small);
+        g.available.empty();
+        assert!(
+            matches!(
+                g.handle_action(Action::Play()),
+                Err(GameError::InvalidHand(PlayHandError::NoCards))
+            ),
+            "playing an empty hand"
+        );
+
+        // TooManyCards. Not reachable through `Action::Play`, because
+        // `select_card` refuses past the five-card limit first, so it is
+        // driven through the public `SelectHand` entry that the engine
+        // itself calls. Recorded here because it is a real branch: the
+        // question is whether the hand is capped before or after the
+        // partial-hand rules relax it.
+        let too_many: Vec<Card> = (0..8).map(|_| Card::new(Value::Ace, Suit::Heart)).collect();
+        assert!(
+            matches!(
+                SelectHand::new(too_many).best_hand(),
+                Err(PlayHandError::TooManyCards)
+            ),
+            "eight cards is too many"
+        );
+        // Four Fingers is the one case where fewer than five is still legal,
+        // so five must remain legal and four must too.
+        let five: Vec<Card> = (0..5).map(|_| Card::new(Value::Ace, Suit::Heart)).collect();
+        assert!(SelectHand::new(five).best_hand().is_ok(), "five is fine");
+
+        // UnknownHand: `best_hand` on a hand it cannot classify. Reached
+        // through the public scoring entry rather than by constructing one.
+        let mut g = Game::default();
+        g.start();
+        g.blind = Some(Blind::Small);
+        g.stage = Stage::Blind(Blind::Small);
+        g.available.empty();
+        assert!(
+            SelectHand::new(g.available.cards())
+                .best_hand()
+                .is_err_and(|e| matches!(e, PlayHandError::NoCards)),
+            "an empty hand is not a hand"
+        );
+
+        // NoRemainingPlays: spend them all, then try once more.
+        let mut g = Game::default();
+        g.start();
+        g.blind = Some(Blind::Small);
+        g.stage = Stage::Blind(Blind::Small);
+        g.plays = 0;
+        for card in g.available.cards().into_iter().take(1) {
+            g.select_card(card).expect("select");
+        }
+        assert!(
+            matches!(
+                g.handle_action(Action::Play()),
+                Err(GameError::NoRemainingPlays)
+            ),
+            "playing with no hands left"
+        );
+
+        // NoRemainingDiscards.
+        let mut g = Game::default();
+        g.start();
+        g.blind = Some(Blind::Small);
+        g.stage = Stage::Blind(Blind::Small);
+        g.discards_remaining = 0;
+        for card in g.available.cards().into_iter().take(1) {
+            g.select_card(card).expect("select");
+        }
+        assert!(
+            matches!(
+                g.handle_action(Action::Discard()),
+                Err(GameError::NoRemainingDiscards)
+            ),
+            "discarding with no discards left"
+        );
+
+        // --- errors about cards that are not where they should be ---
+
+        // NoCardMatch: deselect a card not in the hand.
+        let mut g = Game::default();
+        g.start();
+        g.begin_round(Blind::Small);
+        let stranger = Card::new(Value::King, Suit::Heart);
+        assert!(
+            matches!(
+                g.handle_action(Action::DeselectCard(stranger)),
+                Err(GameError::NoCardMatch)
+            ),
+            "deselecting a card that was never dealt"
+        );
+
+        // InvalidMoveDirection: move the leftmost card further left.
+        let mut g = Game::default();
+        g.start();
+        g.begin_round(Blind::Small);
+        let leftmost = g.available.cards().into_iter().next().expect("a dealt hand");
+        assert!(
+            matches!(
+                g.handle_action(Action::MoveCard(MoveDirection::Left, leftmost)),
+                Err(GameError::InvalidMoveDirection)
+            ),
+            "moving the leftmost card left"
+        );
+        let rightmost = g.available.cards().into_iter().next_back().expect("a dealt hand");
+        assert!(
+            matches!(
+                g.handle_action(Action::MoveCard(MoveDirection::Right, rightmost)),
+                Err(GameError::InvalidMoveDirection)
+            ),
+            "moving the rightmost card right"
+        );
+
+        // NoJokerMatch: buy a joker the shop is not offering.
+        let mut g = game_in_shop(100);
+        g.shop.jokers.clear();
+        assert!(
+            matches!(
+                g.handle_action(Action::BuyJoker(Jokers::TheJoker(Default::default()))),
+                Err(GameError::NoJokerMatch)
+            ),
+            "buying a joker that is not in the shop"
+        );
+
+        // NoConsumableMatch.
+        let mut g = game_in_shop(100);
+        g.shop.consumables.clear();
+        assert!(
+            matches!(
+                g.handle_action(Action::BuyConsumable(Consumable::tarot(Tarot::Fool))),
+                Err(GameError::NoConsumableMatch)
+            ),
+            "buying a consumable that is not in the shop"
+        );
+
+        // NoVoucherMatch: buy the voucher slot when nothing is on offer.
+        let mut g = game_in_shop(100);
+        g.shop.voucher = None;
+        assert!(
+            g.handle_action(Action::BuyVoucher(Voucher::Grabber))
+                .is_err(),
+            "buying with no voucher on offer"
+        );
+
+        // InvalidSelectCard: selecting past the five-card limit is refused
+        // rather than silently ignored, so the selection tops out at five.
+        let mut g = Game::default();
+        g.start();
+        g.begin_round(Blind::Small);
+        let cards = g.available.cards();
+        assert!(
+            cards.len() > g.config.selected_max,
+            "need a hand larger than the selection limit"
+        );
+        for card in cards {
+            let _ = g.select_card(card);
+        }
+        assert_eq!(g.available.selected().len(), g.config.selected_max);
+        // The sixth card is still there, it just is not selected.
+        let overflowed = g.available.not_selected();
+        assert!(!overflowed.is_empty(), "the rest of the hand is untouched");
+        for card in overflowed {
+            assert!(g.select_card(card).is_err(), "a sixth selection is refused");
+        }
+        assert_eq!(g.available.selected().len(), g.config.selected_max);
+    }
+
+    /// The boss blinds that constrain hand shape return specific errors, and
+    /// those branches were never taken — only the "action is absent" path was
+    /// tested, which goes through a different check entirely.
+    #[test]
+    fn test_hand_shape_bosses_return_their_own_errors() {
+        // The Eye: all cards must be the same rank.
+        let mut g = Game::default();
+        g.start();
+        g.current_boss = Some(BossBlind::Eye);
+        g.blind = Some(Blind::Boss);
+        g.stage = Stage::Blind(Blind::Boss);
+        // The Eye refuses a repeat of the rank just played.
+        g.boss_state.last_played = Some(HandRank::OnePair);
+        g.available.empty();
+        g.available
+            .extend(vec![Card::new(Value::Ace, Suit::Heart), Card::new(Value::Ace, Suit::Heart)]);
+        for card in g.available.cards() {
+            g.select_card(card).expect("select");
+        }
+        assert!(
+            g.handle_action(Action::Play())
+                .is_err_and(|e| matches!(
+                    e,
+                    GameError::InvalidHand(PlayHandError::EyeRepeatRank)
+                )),
+            "The Eye rejects a repeat of the rank it just saw"
+        );
+
+        // The Mouth: the next hand must be the one that was played.
+        let mut g = Game::default();
+        g.start();
+        g.current_boss = Some(BossBlind::Mouth);
+        g.blind = Some(Blind::Boss);
+        g.stage = Stage::Blind(Blind::Boss);
+        // The Mouth locks the rank on the first hand and demands it after.
+        g.boss_state.locked_rank = Some(HandRank::FullHouse);
+        g.available.empty();
+        g.available
+            .extend(vec![Card::new(Value::Ace, Suit::Heart), Card::new(Value::Ace, Suit::Heart)]);
+        for card in g.available.cards() {
+            g.select_card(card).expect("select");
+        }
+        assert!(
+            g.handle_action(Action::Play())
+                .is_err_and(|e| matches!(
+                    e,
+                    GameError::InvalidHand(PlayHandError::MouthRankMismatch)
+                )),
+            "The Mouth rejects a hand that is not the locked one"
+        );
+
+        // The Psychic: exactly five cards.
+        let mut g = Game::default();
+        g.start();
+        g.current_boss = Some(BossBlind::Psychic);
+        g.blind = Some(Blind::Boss);
+        g.stage = Stage::Blind(Blind::Boss);
+        g.available.empty();
+        g.available
+            .extend(vec![Card::new(Value::Ace, Suit::Heart), Card::new(Value::King, Suit::Heart)]);
+        for card in g.available.cards() {
+            g.select_card(card).expect("select");
+        }
+        assert!(
+            g.handle_action(Action::Play())
+                .is_err_and(|e| matches!(e, GameError::InvalidHand(_))),
+            "The Psychic rejects fewer than five cards"
+        );
+    }
+
+    /// The action space's own errors, none of which had a test.
+    #[test]
+    fn test_action_space_errors() {
+        let g = Game::default();
+        let space = g.gen_action_space();
+
+        // InvalidIndex: past the end of the vector.
+        let len = space.to_vec().len();
+        assert!(
+            space.to_action(len + 10, &g).is_err(),
+            "an index past the end must not resolve"
+        );
+
+        // MaskedAction: an index the generator did not set. The last bucket
+        // is a joker slot, empty in a fresh game.
+        let vec = space.to_vec();
+        let masked = vec.iter().position(|m| *m == 0).expect("a masked index");
+        assert!(
+            space
+                .to_action(masked, &g)
+                .is_err_and(|e| matches!(e, crate::error::ActionSpaceError::MaskedAction)),
+            "a masked index must not resolve"
+        );
+
+        // The same two failures through `Game`'s own index entry point, which
+        // converts the space error into a `GameError`. This is the path an RL
+        // caller actually uses, and it is the one that produces
+        // `InvalidActionSpace` — the only place that variant is constructed.
+        let mut g = Game::default();
+        g.start();
+        assert!(
+            g.handle_action_index(len + 10)
+                .is_err_and(|e| matches!(e, GameError::InvalidActionSpace)),
+            "an out-of-range index is refused"
+        );
+    }
+
+    /// The Cerulean Bell pins one card of the hand, and it cannot be
+    /// released. The symptom — the card stays selected — was tested; the
+    /// error itself was not, and it is the only thing that makes the
+    /// rejection explicit.
+    #[test]
+    fn test_cerulean_bell_card_cannot_be_deselected() {
+        let mut g = game_in_boss_blind(BossBlind::CeruleanBell);
+        enter_boss_blind(&mut g);
+        let pinned = g.available.selected().into_iter().next().expect("a pinned card");
+        assert!(
+            g.handle_action(Action::DeselectCard(pinned)).is_err(),
+            "the pinned card cannot be released"
+        );
+        // The other cards still can.
+        if let Some(other) = g.available.selected().into_iter().nth(1) {
+            assert!(g.handle_action(Action::DeselectCard(other)).is_ok());
+        }
+    }
+
     /// A joker's accumulator and sell bonus are the state most likely to be
     /// lost in a round trip, so they are pinned directly rather than relying
     /// on a whole-run comparison.

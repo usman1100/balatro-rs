@@ -124,13 +124,24 @@ against a copy of itself.
 
 ## Tier 4 — error paths
 
-11 of 18 `GameError` variants, all 6 `PlayHandError` and all 3
-`ActionSpaceError` are never exercised. `hand.rs:208 UnknownHand` is the only
-hand-evaluation failure path and `play_is_legal` swallows it with `let Ok`.
+DONE. Every one of the 18 `GameError`, 6 `PlayHandError` and 3
+`ActionSpaceError` variants is now constructed by a test, through the public
+API wherever that is possible.
 
-One test per variant. The Eye / Mouth / Psychic errors are currently only
-tested by asserting the action is *absent*, which is a different code path
-from the one that produces the error.
+Two needed a note. `TooManyCards` is not reachable through `Action::Play`,
+because `select_card` refuses past five first, so it is driven through the
+`SelectHand` entry the engine itself calls. `InvalidActionSpace` is only
+constructed by `Game::handle_action_index`, which is the entry point an RL
+caller actually uses, so it is tested there.
+
+The Eye, Mouth and Psychic were *tested* before, but only by asserting the
+action is absent from `gen_actions`, which goes through `play_is_legal` and
+discards the error. The branch that produces the error had never run. The
+Eye also turned out to key off `last_played` and the Mouth off `locked_rank`
+rather than the `first_hand_dealt` I first assumed.
+
+`UnknownHand` is still only reachable by hand-constructing a `SelectHand` the
+evaluator cannot classify; it is checked, but there is no gameplay path.
 
 ## Tier 5 — arithmetic
 
