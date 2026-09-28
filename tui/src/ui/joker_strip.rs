@@ -61,7 +61,7 @@ fn render_jokers(f: &mut Frame, app: &mut AppState, area: Rect) {
         if let Some(joker) = jokers.get(i) {
             let is_cursor = focused && app.cursor == i;
             let name = joker.name();
-            let (line1, line2) = cards::wrap_two_lines(&name, inner_w);
+            let (line1, line2) = cards::wrap_two_lines(name, inner_w);
             let text_style = Style::default()
                 .fg(Color::Magenta)
                 .add_modifier(Modifier::BOLD);
@@ -119,7 +119,7 @@ fn render_consumables(f: &mut Frame, app: &mut AppState, area: Rect) {
             let is_cursor = focused && app.cursor == i;
             let color = super::consumable_type_color(c);
             let name = c.name();
-            let (line1, line2) = cards::wrap_two_lines(&name, inner_w);
+            let (line1, line2) = cards::wrap_two_lines(name, inner_w);
             let text_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
             let lines = vec![
                 Line::from(Span::styled(line1, text_style)),

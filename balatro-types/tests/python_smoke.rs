@@ -28,7 +28,6 @@ use balatro_types::planet::Planets;
 use pyo3::prelude::*;
 
 #[cfg(feature = "python")]
-#[cfg(feature = "python")]
 #[test]
 fn simple_enum_roundtrips() {
     Python::with_gil(|py| {
@@ -40,7 +39,6 @@ fn simple_enum_roundtrips() {
 }
 
 #[cfg(feature = "python")]
-#[cfg(feature = "python")]
 #[test]
 fn card_struct_roundtrips() {
     Python::with_gil(|py| {
@@ -51,7 +49,6 @@ fn card_struct_roundtrips() {
     });
 }
 
-#[cfg(feature = "python")]
 #[cfg(feature = "python")]
 #[test]
 fn planets_roundtrip() {
@@ -65,7 +62,6 @@ fn planets_roundtrip() {
 /// The risky case: `Jokers` is a 150-variant enum-of-structs. Confirms
 /// pyo3's complex-enum pyclass support actually round-trips at runtime,
 /// not just compiles.
-#[cfg(feature = "python")]
 #[cfg(feature = "python")]
 #[test]
 fn jokers_complex_enum_roundtrips() {
@@ -86,7 +82,6 @@ fn jokers_complex_enum_roundtrips() {
 
 /// A complex enum whose variant wraps another complex enum (`PackContent`
 /// wrapping `Jokers`) - one level deeper than the above.
-#[cfg(feature = "python")]
 #[cfg(feature = "python")]
 #[test]
 fn pack_content_wrapping_jokers_roundtrips() {

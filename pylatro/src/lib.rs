@@ -111,9 +111,26 @@ impl GameState {
     fn jokers(&self) -> Vec<Jokers> {
         self.game.jokers.clone()
     }
+    /// Signed: Credit Card lets the balance go negative, and `bankrupt_at`
+    /// is the floor it may be charged down to.
     #[getter]
-    fn money(&self) -> usize {
+    fn money(&self) -> i64 {
         self.game.money
+    }
+
+    /// The floor the balance may be charged down to, negative with Credit
+    /// Card held.
+    #[getter]
+    fn bankrupt_at(&self) -> i64 {
+        self.game.bankrupt_at
+    }
+
+    /// What is actually spendable: the balance less the debt allowance, and
+    /// never negative. This is the number the engine's own affordability
+    /// checks use.
+    #[getter]
+    fn spendable_balance(&self) -> usize {
+        self.game.spendable_balance()
     }
     /// Vouchers redeemed this run, in purchase order.
     #[getter]

@@ -653,7 +653,20 @@ impl ConsumableGenerator {
             })
             .collect();
         if available.is_empty() {
-            return self.gen_planet(planetarium, &[], rng);
+            // Every planet was excluded (or all the rest are secret and
+            // undiscovered). Retry without the exclusion list rather than
+            // recursing, which is one stack frame per retry.
+            let all: Vec<Planets> = Planets::iter()
+                .filter(|p| !p.is_secret() || planetarium.level(p.hand_rank()).plays > 0)
+                .collect();
+            if all.is_empty() {
+                // Only reachable on a planetarium where every planet is
+                // secret and none has been played. Fall back to the whole
+                // set rather than panicking on an empty index.
+                let every: Vec<Planets> = Planets::iter().collect();
+                return every[rng.gen_range(0..every.len())];
+            }
+            return all[rng.gen_range(0..all.len())];
         }
         let i = rng.gen_range(0..available.len());
         available[i]
@@ -886,7 +899,7 @@ mod tests {
         let mut shop = Shop::new();
         shop.consumables = vec![Consumable::planet(Planets::Mercury)];
         assert_eq!(shop.consumables.len(), 1);
-        let c1 = shop.consumables[0].clone();
+        let c1 = shop.consumables[0];
         shop.buy_consumable(&c1).expect("buy consumable");
         assert_eq!(shop.consumables.len(), 0);
     }

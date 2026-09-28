@@ -282,14 +282,19 @@ fn test_every_deck_and_stake_completes_a_run() {
                         break;
                     }
                     let pick = legal[rng.gen_range(0..legal.len())];
-                    let action = space.to_action(pick, &g).expect("masked index resolves");
-                    if g.handle_action(action).is_err() {
-                        break;
-                    }
+                    let action = space
+                        .to_action(pick, &g)
+                        .unwrap_or_else(|e| panic!("{deck:?}/{stake:?}: unmasked index did not convert: {e}"));
+                    g.handle_action(action.clone()).unwrap_or_else(|e| {
+                        panic!("{deck:?}/{stake:?} seed {seed}: {action:?} was offered but failed: {e:?}")
+                    });
                 }
+                // The run must have actually progressed, not merely avoided
+                // panicking. `plays_per_round() >= 1` was true at `start()`
+                // and so asserted nothing.
                 assert!(
-                    g.plays_per_round() >= 1,
-                    "{} / {} left no hands",
+                    g.round > 0 || g.is_over(),
+                    "{:?}/{:?} seed {seed}: no hand was ever played",
                     deck.name(),
                     stake.name()
                 );
@@ -313,6 +318,7 @@ fn test_every_stake_completes_a_run_with_stickers_possible() {
             });
             g.start();
             let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let mut turns = 0;
             for _ in 0..3000 {
                 if g.is_over() {
                     break;
@@ -329,11 +335,22 @@ fn test_every_stake_completes_a_run_with_stickers_possible() {
                     break;
                 }
                 let pick = legal[rng.gen_range(0..legal.len())];
-                let action = space.to_action(pick, &g).expect("masked index resolves");
-                if g.handle_action(action).is_err() {
-                    break;
-                }
+                let action = space
+                    .to_action(pick, &g)
+                    .unwrap_or_else(|e| panic!("{stake:?}: unmasked index did not convert: {e}"));
+                g.handle_action(action.clone()).unwrap_or_else(|e| {
+                    panic!("{stake:?} seed {seed}: {action:?} was offered but failed: {e:?}")
+                });
+                turns += 1;
+                assert!(
+                    turns < 20_000,
+                    "{stake:?} seed {seed}: the run never terminated"
+                );
             }
+            assert!(
+                g.round > 0 || g.is_over(),
+                "{stake:?} seed {seed}: no hand was ever played"
+            );
         }
     }
 }

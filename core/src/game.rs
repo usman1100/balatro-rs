@@ -3219,7 +3219,11 @@ mod tests {
     fn test_real_rng_mode_is_deterministic_across_antes() {
         use crate::pack::PackSize;
 
-        fn run() -> Vec<(Vec<String>, Vec<String>, Vec<(PackCategory, PackSize)>)> {
+        /// What one ante's shop looked like, for diffing against the real
+        /// game. Named because the tuple was long enough that clippy asked.
+        type AnteShop = (Vec<String>, Vec<String>, Vec<(PackCategory, PackSize)>);
+
+        fn run() -> Vec<AnteShop> {
             let config = Config {
                 rng_mode: RngMode::Real,
                 seed_str: Some("TEST".to_string()),

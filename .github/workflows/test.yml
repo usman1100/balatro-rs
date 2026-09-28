@@ -11,14 +11,50 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
-    - name: Build and test python bindings
-      run: cargo test -p pylatro --verbose
+    - name: Clippy
+      run: cargo clippy --all-targets -- -D warnings
+    - name: Format
+      run: cargo fmt --check
+
+  # The unit tests cover behaviour, but the two public move APIs are only
+  # really exercised over many complete runs. These were `#[ignore]`d, so
+  # nothing ran them, and they used an unseeded rng, so a failure could not
+  # be replayed. Both are fixed; the count is widened here.
+  soak:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Soak the move APIs
+      run: cargo test -p balatro-rs --release --test test -- --nocapture
+      env:
+        BALATRO_SOAK_GAMES: 2000
+    - name: Soak every deck and stake
+      run: cargo test -p balatro-rs --release --test deck_stake
+
+  # The Python bindings are a cdylib, so `cargo test -p pylatro` compiles
+  # and asserts nothing. The only real coverage is the enum round-trips in
+  # balatro-types, which are behind the `python` feature and silently
+  # reported as "0 passed" before.
+  python:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Build the bindings
+      run: cargo build -p balatro-rs --features python --verbose
+    - name: Enum round-trips
+      run: cargo test -p balatro-types --features python --verbose
+    - name: Install maturin and smoke-test
+      run: |
+        pip install maturin
+        maturin develop --manifest-path pylatro/Cargo.toml
+        python pylatro/test/main.py
