@@ -6430,6 +6430,149 @@ mod tests {
         );
     }
 
+    /// Three vouchers with live effects had no test at all: Nacho Tong and
+    /// Recyclomancy (per-round resources) and Palette (hand size). They are
+    /// folded into the same `hands_delta` / `discards_delta` /
+    /// `hand_size_bonus` sums as the vouchers that *were* covered, which is
+    /// also why a regression there is easy to miss — adding a fourth term to
+    /// one of those sums looks the same as adding a third.
+    #[test]
+    fn test_nacho_tong_recyclomancy_and_palette() {
+        let mut g = game_in_shop(100);
+        let hands = g.plays_per_round();
+        let discards = g.discards_per_round();
+        let size = g.hand_size();
+
+        redeem(&mut g, Voucher::NachoTong);
+        assert_eq!(g.plays_per_round(), hands + 1, "Nacho Tong: +1 hand");
+
+        redeem(&mut g, Voucher::Recyclomancy);
+        assert_eq!(
+            g.discards_per_round(),
+            discards + 1,
+            "Recyclomancy: +1 discard"
+        );
+
+        redeem(&mut g, Voucher::Palette);
+        assert_eq!(g.hand_size(), size + 1, "Palette: +1 hand size");
+
+        // And they stack with the vouchers that share those sums, so a term
+        // dropped from either sum shows up here.
+        redeem(&mut g, Voucher::Grabber);
+        assert_eq!(g.plays_per_round(), hands + 2, "with Grabber too");
+        redeem(&mut g, Voucher::Wasteful);
+        assert_eq!(g.discards_per_round(), discards + 2, "with Wasteful too");
+    }
+
+    /// A boss-debuffed card contributes nothing at all — not its chips, its
+    /// enhancement, its edition or its seal. The wiki is explicit that only
+    /// Negative and Stone survive a debuff, and the scoring loop skips the
+    /// whole card, but nothing checked it: the loop was only ever exercised
+    /// with debuffed cards that happened to have no modifiers.
+    #[test]
+    fn test_a_debuffed_card_contributes_nothing() {
+        let score_with = |mutate: fn(&mut Card)| {
+            let mut g = Game::default();
+            g.start();
+            g.blind = Some(Blind::Small);
+            g.stage = Stage::Blind(Blind::Small);
+            g.current_boss = Some(BossBlind::Club);
+            g.blind = Some(Blind::Boss);
+            g.stage = Stage::Blind(Blind::Boss);
+            let mut card = Card::new(Value::Ace, Suit::Club);
+            mutate(&mut card);
+            g.available.extend(vec![card]);
+            let hand = SelectHand::new(g.available.cards()).best_hand().unwrap();
+            g.calc_score(hand)
+        };
+
+        let plain = score_with(|_| {});
+        let foil = score_with(|c| c.edition = Edition::Foil);
+        let holo = score_with(|c| c.edition = Edition::Holographic);
+        let poly = score_with(|c| c.edition = Edition::Polychrome);
+        let bonus = score_with(|c| c.enhancement = Some(Enhancement::Bonus));
+        let gold = score_with(|c| c.seal = Some(Seal::Gold));
+
+        for (name, score) in [
+            ("Foil", foil),
+            ("Holographic", holo),
+            ("Polychrome", poly),
+            ("Bonus", bonus),
+            ("Gold seal", gold),
+        ] {
+            assert_eq!(
+                score, plain,
+                "a Club card debuffed by The Club should score like a plain \
+                 one, but the {name} changed it to {score} from {plain}"
+            );
+        }
+    }
+
+    /// The same card un-debuffed does score its modifiers, so the test above
+    /// is not passing because the modifiers do nothing.
+    #[test]
+    fn test_an_undebuffed_card_does_score_its_modifiers() {
+        let score_with = |boss: Option<BossBlind>, edition: Edition| {
+            let mut g = Game::default();
+            g.start();
+            g.current_boss = boss;
+            g.blind = Some(Blind::Boss);
+            g.stage = Stage::Blind(Blind::Boss);
+            let mut card = Card::new(Value::Ace, Suit::Club);
+            card.edition = edition;
+            g.available.extend(vec![card]);
+            let hand = SelectHand::new(g.available.cards()).best_hand().unwrap();
+            g.calc_score(hand)
+        };
+
+        // Compare like for like: the same boss, one card plain and one Foil.
+        // A boss that does not debuff Clubs leaves the edition scoring, so
+        // both the effect and its suppression are shown.
+        let base = score_with(Some(BossBlind::Wall), Edition::Base);
+        let foil = score_with(Some(BossBlind::Wall), Edition::Foil);
+        assert!(foil > base, "Foil adds chips: {foil} vs {base}");
+
+        // And The Club is what suppresses it.
+        let club_base = score_with(Some(BossBlind::Club), Edition::Base);
+        let club_foil = score_with(Some(BossBlind::Club), Edition::Foil);
+        assert_eq!(club_foil, club_base, "unless The Club debuffs it");
+    }
+
+    /// Lucky triggers were never asserted: both the +20 Mult roll and the
+    /// $20 roll are on the real game's own node, and neither had a test.
+    #[test]
+    fn test_lucky_card_rolls_both_of_its_effects() {
+        let mut mults = 0;
+        let mut money = 0;
+        for seed in 0..400u64 {
+            let mut g = Game::new(Config {
+                seed: Some(seed),
+                ..Config::default()
+            });
+            g.start();
+            g.blind = Some(Blind::Small);
+            g.stage = Stage::Blind(Blind::Small);
+            let mut card = Card::new(Value::Ace, Suit::Heart);
+            card.enhancement = Some(Enhancement::Lucky);
+            g.available.extend(vec![card]);
+            let hand = SelectHand::new(g.available.cards()).best_hand().unwrap();
+            let before = (g.chips, g.mult, g.money, g.lucky_triggers);
+            g.calc_score(hand);
+            if g.lucky_triggers > before.3 {
+                mults += 1;
+            }
+            if g.money > before.2 {
+                money += 1;
+            }
+        }
+        // 1 in 5 over 400 seeds, and 1 in 15, so both must fire and neither
+        // must fire on every single card.
+        assert!(mults > 20, "Lucky's +20 Mult fired only {mults}/400 times");
+        assert!(mults < 380, "and it fired on {mults}/400, too often for 1 in 5");
+        assert!(money > 5, "Lucky's $20 fired only {money}/400 times");
+        assert!(money < 380, "and it fired on {money}/400, too often for 1 in 15");
+    }
+
     #[test]
     fn test_seed_money_raises_the_interest_cap() {
         let mut g = game_in_shop(100);

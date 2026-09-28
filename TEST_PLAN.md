@@ -92,11 +92,21 @@ against a copy of itself.
 - Still unpinned: all 24 tag values, 32 voucher costs (one derivable), 15
   deck starting contents (three covered), 6 pack costs (three covered),
   and the `balatro-seed` pool contents and weights beyond the name check.
-- `BossBlind::Fish` is the only boss with no test reference — and it holds
-  0.2.
-- Lucky enhancement, Wild, Negative-as-a-played-card, Blue/Purple seals during
-  scoring.
-- 8 of 32 vouchers have no test reference, three of them with live effects.
+- `BossBlind::Fish` now has four tests (0.2).
+- DONE: the four partial-hand jokers are now tested by *owning* them rather
+  than by hand-constructing `HandRules`, and each is checked to lapse when
+  sold. That was the actual untested part — the hand evaluator was covered,
+  the registry-to-`hand_rules()` wiring was not.
+- DONE: both Lucky rolls (+20 Mult at 1 in 5, $20 at 1 in 15) over 400 seeds.
+- DONE: a debuffed card contributes nothing — chip value, enhancement,
+  edition and seal all checked against an undebuffed baseline, and against a
+  boss that does not debuff. The code was right; nothing checked it.
+- Wild cards, and Blue/Purple seals *during* scoring, are still uncovered.
+- DONE: Nacho Tong, Recyclomancy and Palette, the three vouchers with live
+  effects that had no test, including that they stack with the vouchers
+  sharing the same sum.
+- Still uncovered: the four Merchant/Tycoon rate vouchers, Tarot Merchant,
+  Planet Merchant and Illusion.
 - 55 of 150 jokers have no test reference. Four Fingers / Smeared / Shortcut
   are only tested by constructing `HandRules` by hand, never by owning the
   joker, so `hand_rules()` wiring is unverified.

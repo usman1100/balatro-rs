@@ -2061,6 +2061,94 @@ mod tests {
     // balatro_types::Jokers now defines all jokers but only a subset have
     // `effects()` behavior implemented. Shop/pack generation
     // must never offer joker that silently does nothing.
+    /// The four partial-hand jokers are currently tested by constructing
+    /// `HandRules` by hand, which proves the hand evaluator honours the rules
+    /// but says nothing about whether owning the joker actually sets them.
+    /// `hand_rules()` reads the registry, and the registry is rebuilt on every
+    /// joker change, so that wiring is exactly the untested part.
+    #[test]
+    fn test_owning_a_partial_hand_joker_sets_its_hand_rules() {
+        use crate::hand::HandRules;
+        let blank = HandRules::DEFAULT;
+        assert_eq!(blank.hand_size, 5, "the default is a five-card hand");
+        assert!(!blank.gappy_straights);
+        assert!(!blank.smeared_suits);
+
+        /// A joker, and the predicate its rule must satisfy.
+        type Case = (Jokers, fn(&HandRules) -> bool);
+
+        let cases: &[Case] = &[
+            (Jokers::FourFingers(FourFingers::default()), |r| r.hand_size == 4),
+            (Jokers::Shortcut(Shortcut::default()), |r| r.gappy_straights),
+            (Jokers::SmearedJoker(SmearedJoker::default()), |r| r.smeared_suits),
+        ];
+
+        for (joker, expected) in cases {
+            let mut g = Game::default();
+            g.start();
+            assert_eq!(g.hand_rules(), blank, "with nothing held");
+            assert!(!expected(&g.hand_rules()), "{} should not apply yet", joker.name());
+
+            g.jokers.push(joker.clone());
+            g.effect_registry
+                .register_jokers(g.jokers.clone(), &g.clone());
+            assert!(
+                expected(&g.hand_rules()),
+                "{} should set its rule when owned",
+                joker.name()
+            );
+
+            // And selling it must take the rule back off, which is the other
+            // half of the registry wiring.
+            g.jokers.clear();
+            g.effect_registry
+                .register_jokers(g.jokers.clone(), &g.clone());
+            assert_eq!(
+                g.hand_rules(),
+                blank,
+                "{} sold, the rule should lapse",
+                joker.name()
+            );
+        }
+    }
+
+    /// Splash is the fourth partial-hand joker and works the other way round:
+    /// it does not change the hand's *shape* but which cards score.
+    #[test]
+    fn test_owning_splash_scores_every_played_card() {
+        let cards = [
+            (Value::Two, Suit::Heart),
+            (Value::Two, Suit::Club),
+            (Value::Five, Suit::Club),
+            (Value::Seven, Suit::Heart),
+            (Value::King, Suit::Spade),
+        ];
+        let score_of = |g: &mut Game| {
+            g.available = Default::default();
+            g.available
+                .extend(cards.iter().map(|(v, s)| Card::new(*v, *s)).collect());
+            let hand = SelectHand::new(g.available.cards()).best_hand().unwrap();
+            g.calc_score(hand)
+        };
+
+        let mut without = Game::default();
+        without.start();
+        let plain = score_of(&mut without);
+
+        let mut with = Game::default();
+        with.start();
+        with.jokers.push(Jokers::Splash(Default::default()));
+        with
+            .effect_registry
+            .register_jokers(with.jokers.clone(), &with.clone());
+        let splash = score_of(&mut with);
+
+        assert!(
+            splash > plain,
+            "Splash scores the three cards that made no hand: {splash} vs {plain}"
+        );
+    }
+
     #[test]
     fn test_joker_implementation_count_is_tracked() {
         // Bumped as jokers land, and checked against `is_implemented` so
