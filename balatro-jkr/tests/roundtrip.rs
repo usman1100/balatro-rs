@@ -36,12 +36,16 @@ fn synthetic_fixtures_roundtrip() {
     }
 }
 
-/// Real, private `.jkr` files (see tests/fixtures/real/README.md). A no-op
-/// until some are actually present on disk.
+/// Real, private `.jkr` files (see tests/fixtures/real/README.md).
+///
+/// Deliberately *not* asserting a non-empty file list. The real files are
+/// private and gitignored, so on CI this directory is always empty and an
+/// `assert!(!files.is_empty())` would fail the build every time. The
+/// sibling synthetic test has that guard because its files are committed;
+/// this one does not, and the comment records why the two differ.
 #[test]
 fn real_fixtures_decode_and_roundtrip() {
     let files = fixture_files("tests/fixtures/real", "jkr");
-
     for path in files {
         let bytes = fs::read(&path).unwrap();
         let decoded = balatro_jkr::decode(&bytes)

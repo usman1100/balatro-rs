@@ -63,12 +63,22 @@ test in the crate; `node_id_strings_match_immolate` and
 `proc_node_strings_match_the_game` are circular — they compare the table
 against a copy of itself.
 
-- Pin `explore -- TEST --ante N` output to fixture files (note `.gitignore`
-  excludes `*.json`, so fixtures need another extension or a scoped rule).
-- Pin `pseudohash` for known seeds against the Lua.
-- Pin a few `ProcNode` draws.
-- Note the three latent panics: `randweightedchoice` sentinel assumption, the
-  empty-pool index, and `voucher_upgrade`'s hand-maintained pairing.
+- Golden fixtures: DONE. The rendering moved from the `explore` binary into
+  `balatro-seed/src/render.rs` so it is callable from a test, and four seeds
+  are pinned under `tests/golden/` (`.txt`, since `.gitignore` excludes
+  `*.json`).
+- `pseudohash` known-answer: DONE. Eight inputs checked against values
+  computed by reimplementing the Lua in Python, not read back out of the
+  Rust — the first non-circular check in the crate.
+- Fixtures alone only pin *stability*, not correctness. `VERIFIED` in the
+  golden test is the short list a human has diffed against the reference
+  site; it is `TEST` only, and the README says the same. Adding a seed to the
+  fixture list does not make it verified.
+- Still open: the `node_id_strings_match_immolate` and
+  `proc_node_strings_match_the_game` tests are circular (they compare the
+  tables against copies of themselves), and the three latent panics —
+  `randweightedchoice`'s sentinel assumption, the empty-pool index, and
+  `voucher_upgrade`'s hand-maintained pairing — are unfixed.
 
 ## Tier 2 — coverage that is thin rather than wrong
 
@@ -88,13 +98,12 @@ against a copy of itself.
 
 | Test | Problem |
 |---|---|
-| `balatro-jkr/tests/roundtrip.rs:42` | iterates an empty fixture list and passes vacuously; sibling test has a non-empty guard, this one does not |
-| `balatro-profile` real-data tests (5) | `else { return }` on a missing fixture, so all five are no-ops today |
-| `core/tests/test.rs:65,127` | use `thread_rng()`, unseeded, and assert almost nothing |
-| `core/tests/deck_stake.rs:257,305` | `if handle_action(...).is_err() { break }` silently ends the run; assertions are trivially true |
-| `core/src/lib.rs:507` | `.expect("valid index to action")` on a random index — this is the flake that 0.1 would have caused |
-| `pylatro` | 0 tests; CI's `cargo test -p pylatro` asserts nothing (cdylib) |
-| `balatro-types/tests/python_smoke.rs` | `#![cfg(feature = "python")]`, so `cargo test` reports "0 passed" and the 5 tests never run |
+| `balatro-jkr/tests/roundtrip.rs:42` | DONE — comment now records why it differs from its sibling: the real files are private, so a non-empty guard would fail CI every run. |
+| `balatro-profile` real-data tests (5) | DONE — all five skips now print a note naming the missing directory, instead of passing as if they had run. |
+| `core/tests/test.rs` soaks | DONE — seeded, asserting, un-`#[ignore]`d, and the index is drawn from the unmasked entries rather than by rejection sampling. Count via `BALATRO_SOAK_GAMES`, default 200. Verified clean at 4000. |
+| `core/tests/deck_stake.rs:257,305` | `if handle_action(...).is_err() { break }` silently ends the run; assertions are trivially true — TODO |
+| `pylatro` | 0 tests; CI's `cargo test -p pylatro` asserts nothing (cdylib) — TODO, or drop the line |
+| `balatro-types/tests/python_smoke.rs` | DONE — the file-level `#![cfg]` is gone, each test is gated individually, and a test that runs *without* the feature prints a note. 5 pass with `--features python`, 1 skip-note without. |
 
 ## Tier 4 — error paths
 

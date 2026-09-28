@@ -194,6 +194,7 @@ mod tests {
     #[test]
     fn test_parses_real_1_save_white_red() {
         let Some(save) = fixture("1-save.jkr") else {
+            eprintln!("note: no private fixtures under tests/fixtures/real; the real-save tests are skipping");
             return;
         };
         let s = SaveSnapshot::from_lua(&save).expect("parses");
@@ -206,6 +207,7 @@ mod tests {
     #[test]
     fn test_parses_real_yellow_deck_red_stake() {
         let Some(save) = fixture("save-yellowdeck-redstake.jkr") else {
+            eprintln!("note: no private fixtures under tests/fixtures/real; the real-save tests are skipping");
             return;
         };
         let s = SaveSnapshot::from_lua(&save).expect("parses");
@@ -216,6 +218,7 @@ mod tests {
     #[test]
     fn test_parses_real_red_deck_orange_stake() {
         let Some(save) = fixture("save-reddeck-orangestake.jkr") else {
+            eprintln!("note: no private fixtures under tests/fixtures/real; the real-save tests are skipping");
             return;
         };
         let s = SaveSnapshot::from_lua(&save).expect("parses");

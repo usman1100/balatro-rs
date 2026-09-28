@@ -1,0 +1,155 @@
+==ANTE 1==
+Boss: The Psychic
+Voucher: Magic Trick
+Tags: Juggle Tag, Rare Tag
+Shop Queue: 
+1) Venus
+2) Golden Joker
+3) Square Joker
+4) Delayed Gratification
+5) Lusty Joker
+6) Runner
+7) Shoot the Moon
+8) Fortune Teller
+9) Scholar
+10) Foil Certificate
+11) [playing card: not implemented]
+12) Ride the Bus
+13) [playing card: not implemented]
+14) [playing card: not implemented]
+15) Crazy Joker
+
+Packs: 
+Buffoon Pack - Drunkard, Campfire
+Jumbo Celestial Pack - Jupiter, Saturn, Uranus, Neptune, Venus
+Jumbo Arcana Pack - Justice, Strength, The Chariot, The Magician, The Empress
+Celestial Pack - Saturn, Earth, Jupiter
+
+==ANTE 2==
+Boss: The Mouth
+Voucher: Wasteful
+Tags: Economy Tag, Garbage Tag
+Shop Queue: 
+1) Dusk
+2) Lusty Joker
+3) Crafty Joker
+4) Foil Odd Todd
+5) Bloodstone
+6) The High Priestess
+7) Ceremonial Dagger
+8) Popcorn
+9) Mystic Summit
+10) The Devil
+11) Blueprint
+12) Venus
+13) Neptune
+14) Uranus
+15) Foil Egg
+16) Neptune
+17) Scholar
+18) Earth
+19) Trading Card
+20) Showman
+21) [playing card: not implemented]
+22) Chaos the Clown
+23) Saturn
+24) [playing card: not implemented]
+25) Brainstorm
+26) The Star
+27) [playing card: not implemented]
+28) Shortcut
+29) Certificate
+30) Scholar
+31) [playing card: not implemented]
+32) Neptune
+33) Wily Joker
+34) Earth
+35) Droll Joker
+36) The Hermit
+37) [playing card: not implemented]
+38) Ride the Bus
+39) Troubadour
+40) Juggler
+41) Egg
+42) The Empress
+43) Mars
+44) Odd Todd
+45) Splash
+46) Superposition
+47) Brainstorm
+48) Green Joker
+49) Burglar
+50) [playing card: not implemented]
+
+Packs: 
+Arcana Pack - The High Priestess, Justice, The Star
+Standard Pack - 6 of Diamonds, 10 of Diamonds, Glass 8 of Spades
+Buffoon Pack - Runner, Four Fingers
+Arcana Pack - The Magician, Death, The Hanged Man
+Arcana Pack - The High Priestess, Temperance, The Wheel of Fortune
+Jumbo Arcana Pack - The Chariot, The World, The High Priestess, The Wheel of Fortune, Strength
+
+==ANTE 3==
+Boss: The Water
+Voucher: Hieroglyph
+Tags: Economy Tag, Garbage Tag
+Shop Queue: 
+1) Credit Card
+2) [playing card: not implemented]
+3) Judgement
+4) Faceless Joker
+5) Abstract Joker
+6) Mars
+7) [playing card: not implemented]
+8) Photograph
+9) Vampire
+10) Shoot the Moon
+11) The High Priestess
+12) Mystic Summit
+13) [playing card: not implemented]
+14) The World
+15) Hallucination
+16) Obelisk
+17) [playing card: not implemented]
+18) Blueprint
+19) To Do List
+20) Card Sharp
+21) Runner
+22) [playing card: not implemented]
+23) Mime
+24) Judgement
+25) The High Priestess
+26) Sixth Sense
+27) Clever Joker
+28) Space Joker
+29) The High Priestess
+30) The Hierophant
+31) Even Steven
+32) 8 Ball
+33) Mail-In Rebate
+34) Credit Card
+35) Mail-In Rebate
+36) Even Steven
+37) Square Joker
+38) Gluttonous Joker
+39) Foil Gluttonous Joker
+40) Space Joker
+41) The World
+42) Splash
+43) Saturn
+44) Uranus
+45) [playing card: not implemented]
+46) Devious Joker
+47) Hologram
+48) To Do List
+49) Matador
+50) Juggler
+
+Packs: 
+Jumbo Spectral Pack - Trance, Grim, Wraith, Cryptid
+Arcana Pack - Judgement, The Hermit, Strength
+Celestial Pack - Saturn, Venus, Mercury
+Arcana Pack - The World, The Fool, The Magician
+Arcana Pack - The Empress, The Hierophant, The Hanged Man
+Celestial Pack - Uranus, Mars, Mercury
+

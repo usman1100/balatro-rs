@@ -11,8 +11,14 @@ serde = { version = "1", features = ["derive"], optional = true }
 pyo3 = { version = "0.23.1", optional = true }
 
 [dev-dependencies]
-# auto-initialize only affects test/example builds (dev-dependencies never
+# `auto-initialize` only affects test/example builds (dev-dependencies never
 # leak their extra features to downstream consumers of this crate).
+#
+# Not optional-by-feature, because a dev-dependency is always resolved: an
+# unconditional pyo3 here meant `cargo test -p balatro-types` could not even
+# *build* on a Python pyo3 rejects, whatever features were selected. The
+# smoke tests are behind `#[cfg(feature = "python")]` instead, and print a
+# note when skipped.
 pyo3 = { version = "0.23.1", features = ["auto-initialize"] }
 
 [features]

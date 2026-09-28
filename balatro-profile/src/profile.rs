@@ -603,6 +603,21 @@ mod tests {
 
     /// Real save fixtures are gitignored (personal data) and won't exist
     /// on a fresh checkout (e.g. CI) — `None` there, not a failure.
+    /// Prints, once per test binary, that the private real-save fixtures are
+    /// absent and the real-data tests are therefore not running. They skip
+    /// rather than fail, because the files are private and gitignored, but a
+    /// silently passing test reads as coverage that is not there.
+    fn note_no_real_fixtures() -> &'static std::sync::Once {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            eprintln!(
+                "note: no private fixtures under tests/fixtures/real; \
+                 the real-save tests are skipping"
+            );
+        });
+        &ONCE
+    }
+
     fn fixture(name: &str) -> Option<LuaValue> {
         let path = format!("tests/fixtures/real/{name}");
         match fs::read(&path) {
@@ -615,6 +630,7 @@ mod tests {
     #[test]
     fn test_parses_real_1_profile() {
         let (Some(meta), Some(profile)) = (fixture("1-meta.jkr"), fixture("1-profile.jkr")) else {
+            note_no_real_fixtures();
             return;
         };
         let p = Profile::from_lua(&meta, &profile).expect("parses");

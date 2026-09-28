@@ -1,0 +1,155 @@
+==ANTE 1==
+Boss: The Goad
+Voucher: Tarot Merchant
+Tags: Investment Tag, Speed Tag
+Shop Queue: 
+1) Ice Cream
+2) Strength
+3) The Sun
+4) The Emperor
+5) The Lovers
+6) Jupiter
+7) Green Joker
+8) Golden Joker
+9) Hologram
+10) Crafty Joker
+11) The Trio
+12) The Tower
+13) Crafty Joker
+14) Ice Cream
+15) The Chariot
+
+Packs: 
+Buffoon Pack - Baseball Card, Drunkard
+Spectral Pack - Medium, Wraith
+Celestial Pack - Jupiter, Neptune, Mercury
+Jumbo Celestial Pack - Mercury, Jupiter, Earth, Saturn, Venus
+
+==ANTE 2==
+Boss: The House
+Voucher: Hone
+Tags: Ethereal Tag, Buffoon Tag
+Shop Queue: 
+1) Polychrome Loyalty Card
+2) Hologram
+3) The Wheel of Fortune
+4) Hanging Chad
+5) The Tower
+6) Egg
+7) The Wheel of Fortune
+8) To Do List
+9) Greedy Joker
+10) The High Priestess
+11) The Moon
+12) Reserved Parking
+13) Juggler
+14) The Hanged Man
+15) The Empress
+16) Venus
+17) Clever Joker
+18) The World
+19) Raised Fist
+20) Golden Joker
+21) The Lovers
+22) The Hierophant
+23) Campfire
+24) The Moon
+25) Joker
+26) Clever Joker
+27) Abstract Joker
+28) Seance
+29) The Empress
+30) Mercury
+31) Erosion
+32) Pluto
+33) Pluto
+34) Lusty Joker
+35) Smeared Joker
+36) Gros Michel
+37) Business Card
+38) Droll Joker
+39) The Magician
+40) The Lovers
+41) Foil Supernova
+42) Drunkard
+43) Jupiter
+44) Venus
+45) Reserved Parking
+46) The Hierophant
+47) The Lovers
+48) The Chariot
+49) Mars
+50) Erosion
+
+Packs: 
+Spectral Pack - Trance, Aura
+Jumbo Standard Pack - Glass 2 of Hearts, 3 of Hearts, 9 of Spades, Wild Ace of Diamonds, Wild 10 of Clubs
+Arcana Pack - The Sun, The Lovers, The Magician
+Jumbo Celestial Pack - Neptune, Mercury, Venus, Mars, Uranus
+Mega Celestial Pack - Uranus, Mercury, Earth, Saturn, Mars
+Jumbo Buffoon Pack - Even Steven, Stuntman, 8 Ball, Mail-In Rebate
+
+==ANTE 3==
+Boss: The Wall
+Voucher: Hieroglyph
+Tags: Holographic Tag, Holographic Tag
+Shop Queue: 
+1) Supernova
+2) Walkie Talkie
+3) The Fool
+4) The Hanged Man
+5) Oops! All 6s
+6) Venus
+7) Venus
+8) Turtle Bean
+9) The Lovers
+10) The Magician
+11) The Magician
+12) The Emperor
+13) Supernova
+14) Joker
+15) Pluto
+16) Credit Card
+17) Driver's License
+18) Wrathful Joker
+19) Jolly Joker
+20) Gros Michel
+21) Mercury
+22) Earth
+23) The Lovers
+24) The Hanged Man
+25) Hallucination
+26) Polychrome Misprint
+27) The Hermit
+28) Delayed Gratification
+29) The Emperor
+30) Reserved Parking
+31) Droll Joker
+32) Zany Joker
+33) Gluttonous Joker
+34) The Hanged Man
+35) The Lovers
+36) Scary Face
+37) The Magician
+38) The Devil
+39) Strength
+40) Faceless Joker
+41) Jupiter
+42) Crafty Joker
+43) Venus
+44) Justice
+45) Ride the Bus
+46) Hologram
+47) Swashbuckler
+48) Square Joker
+49) The Magician
+50) The Empress
+
+Packs: 
+Celestial Pack - Neptune, Mercury, Earth
+Celestial Pack - Mars, Venus, Neptune
+Mega Standard Pack - 10 of Diamonds, 6 of Hearts, Red Seal 3 of Diamonds, 10 of Spades, Bonus 2 of Clubs
+Arcana Pack - The Wheel of Fortune, The Hierophant, Strength
+Arcana Pack - The Sun, The Magician, The Emperor
+Jumbo Celestial Pack - Venus, Pluto, Neptune, Saturn, Uranus
+

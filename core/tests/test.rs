@@ -5,71 +5,100 @@ use balatro_rs::{
     stage::Stage,
     voucher::Voucher,
 };
-use rand::Rng;
+use rand::{Rng, SeedableRng};
+use rand::rngs::StdRng;
 
-fn run_game_gen_actions() {
-    run_game_gen_actions_with(Game::default());
-}
-
-fn run_game_gen_actions_with(mut g: Game) {
+/// Plays a whole run driven by `gen_actions`, with a seeded rng so a
+/// failure reproduces. Asserts the run actually finished and that every
+/// offered action executed, which the previous version did not: it used
+/// `thread_rng()`, so a failure could not be replayed, and it broke out of
+/// the loop on an error without failing.
+fn run_game_gen_actions(seed: u64) -> Game {
+    let mut g = Game::new(Config {
+        seed: Some(seed),
+        ..Config::default()
+    });
+    let mut rng = StdRng::seed_from_u64(seed);
     g.start();
+    let mut turns = 0;
     while !g.is_over() {
-        // Get all available moves
         let actions: Vec<Action> = g.gen_actions().collect();
         if actions.is_empty() {
             break;
         }
-
-        // Pick a random move and execute it
-        let i = rand::thread_rng().gen_range(0..actions.len());
-        let action = actions[i].clone();
-        let action_res = g.handle_action(action.clone());
-        assert!(action_res.is_ok());
+        let action = actions[rng.gen_range(0..actions.len())].clone();
+        g.handle_action(action.clone())
+            .unwrap_or_else(|e| panic!("seed {seed}: offered {action:?} but it failed: {e:?}"));
+        turns += 1;
+        assert!(turns < 20_000, "seed {seed}: the run never terminated");
     }
-    let result = g.result();
-    // Ensure game is over at end
-    assert!(result.is_some());
-    // Check game state at end
-    assert!(matches!(g.stage, Stage::End(_)));
+    assert!(
+        g.result().is_some(),
+        "seed {seed}: the run ended without a result"
+    );
+    assert!(
+        matches!(g.stage, Stage::End(_)),
+        "seed {seed}: ended in {:?}",
+        g.stage
+    );
+    g
 }
 
-fn run_game_action_space() {
-    let mut g = Game::default();
-
+/// Plays a whole run driven by the action space. The index is chosen from
+/// the unmasked entries rather than by rejection-sampling the whole vector,
+/// so it cannot spin on a sparse mask, and `to_action` is checked before
+/// execution — which is the pair that was broken by the missing
+/// `reroll_boss` arm.
+fn run_game_action_space(seed: u64) -> Game {
+    let mut g = Game::new(Config {
+        seed: Some(seed),
+        ..Config::default()
+    });
+    let mut rng = StdRng::seed_from_u64(seed);
     g.start();
+    let mut turns = 0;
     while !g.is_over() {
-        // Get action space and vector
         let space = g.gen_action_space();
-        let space_vec = space.to_vec();
-        assert!(!space.is_empty());
-
-        // Pick a random move and ensure its unmasked
-        let mut i: usize;
-        loop {
-            i = rand::thread_rng().gen_range(0..space_vec.len());
-            if space_vec[i] == 1 {
-                break;
-            }
+        let legal: Vec<usize> = space
+            .to_vec()
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| **m == 1)
+            .map(|(i, _)| i)
+            .collect();
+        if legal.is_empty() {
+            break;
         }
-        let action = space.to_action(i, &g).expect("valid index to action");
-        // dbg!("game state:\n{}", g.clone());
-        // dbg!("play action: {}", action.clone());
-        let action_res = g.handle_action(action.clone());
-        // dbg!(action);
-        assert!(action_res.is_ok());
+        let i = legal[rng.gen_range(0..legal.len())];
+        let action = space
+            .to_action(i, &g)
+            .unwrap_or_else(|e| panic!("seed {seed}: unmasked index {i} did not convert: {e}"));
+        g.handle_action(action)
+            .unwrap_or_else(|e| panic!("seed {seed}: unmasked index {i} failed to execute: {e:?}"));
+        turns += 1;
+        assert!(turns < 20_000, "seed {seed}: the run never terminated");
     }
-    let result = g.result();
-    // Ensure game is over at end
-    assert!(result.is_some());
-    // Check game state at end
-    assert!(matches!(g.stage, Stage::End(_)));
-    // dbg!("game action history: {:?}", g.action_history);
+    assert!(
+        g.result().is_some(),
+        "seed {seed}: the run ended without a result"
+    );
+    g
+}
+
+/// The two APIs must be able to reach the same conclusion. Playing the same
+/// seeds through both and checking both end cleanly is a weaker check than
+/// comparing them turn by turn, but it does mean a divergence that makes one
+/// of them wedge cannot hide.
+fn run_both_apis(seed: u64) {
+    run_game_gen_actions(seed);
+    run_game_action_space(seed);
 }
 
 #[test]
 fn test_game() {
-    run_game_gen_actions();
-    run_game_action_space();
+    for seed in 0..10 {
+        run_both_apis(seed);
+    }
 }
 
 // `RngMode::Real` routes shop and pack generation through `balatro-seed`,
@@ -122,18 +151,29 @@ fn test_real_rng_mode_shop_playing_cards() {
     }
 }
 
+/// The soak tests, un-ignored. They were `#[ignore]`d and never ran in CI,
+/// while being the only exercise of the two APIs over many complete runs.
+/// Seeded, so a failure replays.
+///
+/// The count is set by `BALATRO_SOAK_GAMES` so a normal run stays quick and
+/// CI can widen it without editing code.
+fn soak_games() -> u64 {
+    std::env::var("BALATRO_SOAK_GAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200)
+}
+
 #[test]
-#[ignore]
 fn test_games_gen_actions() {
-    for _ in 0..1000 {
-        run_game_gen_actions();
+    for seed in 0..soak_games() {
+        run_game_gen_actions(seed);
     }
 }
 
 #[test]
-#[ignore]
 fn test_games_action_space() {
-    for _ in 0..1000 {
-        run_game_action_space();
+    for seed in 0..soak_games() {
+        run_game_action_space(seed);
     }
 }

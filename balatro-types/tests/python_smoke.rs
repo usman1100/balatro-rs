@@ -1,11 +1,34 @@
-#![cfg(feature = "python")]
+//! Round-trips the pyo3-exposed enums through Python. Needs a working
+//! interpreter, so it is behind the `python` feature.
+//!
+//! Without it this file compiles to nothing and `cargo test` reports
+//! `0 passed`, which reads as five passing tests rather than five tests that
+//! did not run. The `else` arm below makes that a visible message instead.
+//!
+//! Run with: `cargo test -p balatro-types --features python`
 
+#[cfg(not(feature = "python"))]
+#[test]
+fn python_smoke_tests_are_skipped_without_the_feature() {
+    eprintln!(
+        "note: balatro-types python smoke tests did not run; \
+         re-run with --features python"
+    );
+}
+
+#[cfg(feature = "python")]
 use balatro_types::card::{Card, Suit, Value};
+#[cfg(feature = "python")]
 use balatro_types::joker::Jokers;
+#[cfg(feature = "python")]
 use balatro_types::pack::PackContent;
+#[cfg(feature = "python")]
 use balatro_types::planet::Planets;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 
+#[cfg(feature = "python")]
+#[cfg(feature = "python")]
 #[test]
 fn simple_enum_roundtrips() {
     Python::with_gil(|py| {
@@ -16,6 +39,8 @@ fn simple_enum_roundtrips() {
     });
 }
 
+#[cfg(feature = "python")]
+#[cfg(feature = "python")]
 #[test]
 fn card_struct_roundtrips() {
     Python::with_gil(|py| {
@@ -26,6 +51,8 @@ fn card_struct_roundtrips() {
     });
 }
 
+#[cfg(feature = "python")]
+#[cfg(feature = "python")]
 #[test]
 fn planets_roundtrip() {
     Python::with_gil(|py| {
@@ -38,6 +65,8 @@ fn planets_roundtrip() {
 /// The risky case: `Jokers` is a 150-variant enum-of-structs. Confirms
 /// pyo3's complex-enum pyclass support actually round-trips at runtime,
 /// not just compiles.
+#[cfg(feature = "python")]
+#[cfg(feature = "python")]
 #[test]
 fn jokers_complex_enum_roundtrips() {
     Python::with_gil(|py| {
@@ -57,6 +86,8 @@ fn jokers_complex_enum_roundtrips() {
 
 /// A complex enum whose variant wraps another complex enum (`PackContent`
 /// wrapping `Jokers`) - one level deeper than the above.
+#[cfg(feature = "python")]
+#[cfg(feature = "python")]
 #[test]
 fn pack_content_wrapping_jokers_roundtrips() {
     Python::with_gil(|py| {

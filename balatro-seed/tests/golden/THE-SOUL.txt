@@ -1,0 +1,155 @@
+==ANTE 1==
+Boss: The Pillar
+Voucher: Seed Money
+Tags: Economy Tag, Uncommon Tag
+Shop Queue: 
+1) Devious Joker
+2) Riff-raff
+3) Foil Egg
+4) Smiley Face
+5) The Star
+6) Odd Todd
+7) Reserved Parking
+8) The Hanged Man
+9) Uranus
+10) Sly Joker
+11) Uranus
+12) Abstract Joker
+13) Pluto
+14) Diet Cola
+15) Clever Joker
+
+Packs: 
+Buffoon Pack - Marble Joker, Blue Joker
+Standard Pack - 7 of Clubs, Lucky Jack of Hearts, Holographic Glass Queen of Spades
+Arcana Pack - Temperance, The High Priestess, The World
+Arcana Pack - The Emperor, The Hermit, Justice
+
+==ANTE 2==
+Boss: The Club
+Voucher: Planet Merchant
+Tags: Garbage Tag, Standard Tag
+Shop Queue: 
+1) Delayed Gratification
+2) Temperance
+3) Uranus
+4) Splash
+5) Mars
+6) Pluto
+7) The Chariot
+8) Odd Todd
+9) Green Joker
+10) Holographic Droll Joker
+11) To Do List
+12) Juggler
+13) The High Priestess
+14) Seance
+15) Joker
+16) Odd Todd
+17) The Star
+18) Scary Face
+19) Half Joker
+20) Acrobat
+21) Devious Joker
+22) Jupiter
+23) Mail-In Rebate
+24) Uranus
+25) Green Joker
+26) Uranus
+27) Mercury
+28) Troubadour
+29) Uranus
+30) Foil Joker
+31) The Tower
+32) Spare Trousers
+33) Shoot the Moon
+34) Pluto
+35) Space Joker
+36) Death
+37) Jupiter
+38) Marble Joker
+39) Misprint
+40) Mars
+41) The Idol
+42) Cartomancer
+43) Superposition
+44) Gluttonous Joker
+45) Hanging Chad
+46) Venus
+47) Jupiter
+48) Venus
+49) Certificate
+50) Castle
+
+Packs: 
+Standard Pack - 5 of Spades, 9 of Spades, Foil Lucky Jack of Hearts
+Celestial Pack - Pluto, Mars, Earth
+Standard Pack - Lucky 5 of Spades, 3 of Hearts, Wild 3 of Spades
+Jumbo Buffoon Pack - Mr. Bones, Smiley Face, Mystic Summit, Bootstraps
+Jumbo Celestial Pack - Neptune, Mars, Earth, Pluto, Saturn
+Standard Pack - Ace of Spades, Stone Jack of Clubs, Purple Seal Steel 7 of Clubs
+
+==ANTE 3==
+Boss: The Fish
+Voucher: Planet Tycoon
+Tags: Polychrome Tag, Double Tag
+Shop Queue: 
+1) Mercury
+2) Pluto
+3) Faceless Joker
+4) Splash
+5) Venus
+6) Even Steven
+7) Sly Joker
+8) Pluto
+9) Drunkard
+10) Holographic Luchador
+11) Temperance
+12) Jupiter
+13) Abstract Joker
+14) Saturn
+15) Jupiter
+16) Earth
+17) Supernova
+18) Droll Joker
+19) Hanging Chad
+20) Neptune
+21) Mercury
+22) Joker
+23) Pluto
+24) Hallucination
+25) Lusty Joker
+26) Death
+27) Mercury
+28) Pluto
+29) The Hanged Man
+30) Neptune
+31) Mars
+32) Superposition
+33) Jupiter
+34) Justice
+35) Mars
+36) Mercury
+37) Jupiter
+38) Popcorn
+39) Uranus
+40) Mystic Summit
+41) Neptune
+42) Venus
+43) Strength
+44) Pluto
+45) Vagabond
+46) Drunkard
+47) Pluto
+48) Reserved Parking
+49) Neptune
+50) Mercury
+
+Packs: 
+Jumbo Standard Pack - 5 of Spades, Gold 5 of Spades, Gold Seal 7 of Clubs, 7 of Clubs, 9 of Clubs
+Celestial Pack - Saturn, Mars, Mercury
+Arcana Pack - The Hanged Man, The Star, The Magician
+Standard Pack - 5 of Diamonds, Red Seal Wild 10 of Hearts, Jack of Spades
+Standard Pack - Foil Mult Jack of Diamonds, Gold Seal 2 of Hearts, Wild 6 of Spades
+Jumbo Standard Pack - 7 of Clubs, 10 of Clubs, Ace of Clubs, 4 of Spades, Blue Seal 9 of Hearts
+

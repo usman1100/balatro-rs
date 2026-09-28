@@ -1,0 +1,155 @@
+==ANTE 1==
+Boss: The Hook
+Voucher: Reroll Surplus
+Tags: Holographic Tag, Economy Tag
+Shop Queue: 
+1) Abstract Joker
+2) Crazy Joker
+3) The Moon
+4) Venus
+5) Four Fingers
+6) The Wheel of Fortune
+7) Clever Joker
+8) Judgement
+9) Gluttonous Joker
+10) Supernova
+11) Fortune Teller
+12) Temperance
+13) Red Card
+14) The Family
+15) Superposition
+
+Packs: 
+Buffoon Pack - Seeing Double, Fortune Teller
+Jumbo Arcana Pack - The Fool, The Devil, The Magician, The Wheel of Fortune, The Hanged Man
+Jumbo Celestial Pack - Earth, Mars, Neptune, Uranus, Mercury
+Arcana Pack - The Empress, Temperance, The Fool
+
+==ANTE 2==
+Boss: The Wheel
+Voucher: Grabber
+Tags: Handy Tag, Juggle Tag
+Shop Queue: 
+1) Acrobat
+2) Riff-raff
+3) Scholar
+4) Drunkard
+5) Uranus
+6) The Moon
+7) Credit Card
+8) Negative Mad Joker
+9) Swashbuckler
+10) Runner
+11) Scary Face
+12) Gros Michel
+13) Square Joker
+14) Mystic Summit
+15) Venus
+16) Flower Pot
+17) Saturn
+18) Abstract Joker
+19) Hologram
+20) Turtle Bean
+21) Zany Joker
+22) Wily Joker
+23) The Lovers
+24) Obelisk
+25) Erosion
+26) The Hanged Man
+27) Jupiter
+28) The Fool
+29) Clever Joker
+30) Credit Card
+31) Ceremonial Dagger
+32) Judgement
+33) Delayed Gratification
+34) Lusty Joker
+35) Shoot the Moon
+36) Hallucination
+37) Venus
+38) Earth
+39) The Tribe
+40) Fortune Teller
+41) Mail-In Rebate
+42) Matador
+43) Ice Cream
+44) Chaos the Clown
+45) Seltzer
+46) Smiley Face
+47) Venus
+48) Banner
+49) Sly Joker
+50) Joker
+
+Packs: 
+Standard Pack - 5 of Clubs, Bonus 5 of Hearts, Blue Seal Foil 7 of Spades
+Jumbo Celestial Pack - Uranus, Pluto, Jupiter, Venus, Mercury
+Arcana Pack - The Chariot, The World, The Hanged Man
+Arcana Pack - The World, The Hierophant, The High Priestess
+Arcana Pack - The Empress, The Hierophant, The World
+Jumbo Standard Pack - Jack of Hearts, Glass 2 of Hearts, Steel 5 of Hearts, 9 of Diamonds, Stone 4 of Clubs
+
+==ANTE 3==
+Boss: The Arm
+Voucher: Overstock
+Tags: Polychrome Tag, Negative Tag
+Shop Queue: 
+1) Golden Joker
+2) Photograph
+3) Foil Even Steven
+4) Driver's License
+5) Misprint
+6) Pluto
+7) Half Joker
+8) Erosion
+9) Uranus
+10) Pluto
+11) Joker Stencil
+12) Green Joker
+13) Jupiter
+14) Wrathful Joker
+15) Spare Trousers
+16) The Chariot
+17) Odd Todd
+18) The Wheel of Fortune
+19) Hanging Chad
+20) Runner
+21) Pluto
+22) Madness
+23) Satellite
+24) Saturn
+25) Ramen
+26) 8 Ball
+27) Greedy Joker
+28) Jupiter
+29) The Chariot
+30) Crafty Joker
+31) Square Joker
+32) The World
+33) Scholar
+34) Gluttonous Joker
+35) Photograph
+36) The Star
+37) Loyalty Card
+38) Smiley Face
+39) Uranus
+40) Fortune Teller
+41) Constellation
+42) Turtle Bean
+43) The Magician
+44) Banner
+45) Shoot the Moon
+46) Joker Stencil
+47) Mr. Bones
+48) Red Card
+49) The Order
+50) Card Sharp
+
+Packs: 
+Jumbo Celestial Pack - Neptune, Uranus, Mars, Mercury, Saturn
+Jumbo Arcana Pack - The Sun, The Hermit, The Emperor, The High Priestess, Temperance
+Jumbo Standard Pack - Stone King of Diamonds, Purple Seal Jack of Diamonds, 8 of Spades, Queen of Hearts, 8 of Clubs
+Jumbo Standard Pack - Mult 6 of Diamonds, Gold 10 of Clubs, Red Seal 9 of Clubs, Bonus 3 of Diamonds, Mult 3 of Hearts
+Mega Standard Pack - Gold Queen of Spades, 4 of Clubs, 5 of Spades, Stone King of Hearts, Gold 3 of Spades
+Celestial Pack - Pluto, Saturn, Earth
+

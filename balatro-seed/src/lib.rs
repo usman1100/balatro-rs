@@ -19,3 +19,5 @@ pub use draws::{ShopItem, pack_card_count, voucher_upgrade};
 pub use instance::{InstParams, Instance};
 pub use proc::{NODE_SOURCE_VERSION, ProcNode};
 pub use rng::{LuaRandom, pseudohash, round13};
+
+pub mod render;

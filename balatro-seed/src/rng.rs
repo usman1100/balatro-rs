@@ -117,6 +117,39 @@ mod tests {
 
     // Hand-computed by running pseudohash("") through the definition:
     // the loop body never executes (empty string), so num stays 1.0.
+    /// Known-answer test for `pseudohash`.
+    ///
+    /// The expected values were computed by reimplementing the game's
+    /// `pseudohash` in Python straight from `misc_functions.lua` —
+    /// `num = ((1.1239285023/num) * byte * math.pi + math.pi * i) % 1`,
+    /// walking the string backwards with a 1-based index — rather than by
+    /// reading them back out of this function, which would be circular.
+    ///
+    /// This is the one place in the workspace where a value is checked
+    /// against something outside the crate. Everything else in the RNG tests
+    /// is self-consistency, which would all still pass if every value were
+    /// wrong by the same amount.
+    #[test]
+    fn pseudohash_matches_the_game() {
+        let cases: &[(&str, f64)] = &[
+            ("", 1.0),
+            ("A", 0.651751842670649),
+            ("TEST", 0.404906606135228),
+            ("seed", 0.965503860978060),
+            ("shop", 0.153285625455965),
+            ("joker", 0.466680120308581),
+            ("TESTSEED", 0.319272078222355),
+            ("balatro", 0.866010068551986),
+        ];
+        for (input, want) in cases {
+            let got = pseudohash(input);
+            assert!(
+                (got - want).abs() < 1e-9,
+                "pseudohash({input:?}) = {got}, expected {want}"
+            );
+        }
+    }
+
     #[test]
     fn pseudohash_empty_string_is_identity() {
         assert_eq!(pseudohash(""), 1.0);
