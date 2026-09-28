@@ -260,6 +260,16 @@ fn render_stats(f: &mut Frame, app: &AppState, inner: Rect) {
         value(game.round.to_string(), Color::White),
     ]));
 
+    // Deck and stake, so a non-default run is visible without a menu.
+    lines.push(Line::from(vec![
+        label("Deck  "),
+        value(game.config.deck.name().to_string(), Color::White),
+    ]));
+    lines.push(Line::from(vec![
+        label("Stake "),
+        value(game.config.stake.name().to_string(), Color::White),
+    ]));
+
     let para = Paragraph::new(Text::from(lines));
     f.render_widget(para, inner);
 }

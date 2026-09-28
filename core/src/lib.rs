@@ -15,6 +15,7 @@ pub mod card;
 pub mod config;
 pub mod consumable;
 pub mod deck;
+pub mod deck_variant;
 pub mod effect;
 pub mod error;
 pub mod game;

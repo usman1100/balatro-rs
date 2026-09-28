@@ -17,8 +17,15 @@ pub enum Ante {
 }
 
 impl Ante {
-    // Base chip requirement.
-    // Eventually this depends on deck and stake.
+    /// 1-based ante number, so `Ante::One` is 1. `Ante::Zero` is 0, which
+    /// is the pre-first-ante value the real game's `get_blind_amount`
+    /// returns 100 for.
+    pub fn number(&self) -> usize {
+        *self as usize
+    }
+
+    // Base chip requirement. Assumes scaling 1; a deck or stake that raises
+    // the ante scaling uses `core::deck_variant::ante_base` instead.
     pub fn base(&self) -> usize {
         match self {
             Self::Zero => 100,

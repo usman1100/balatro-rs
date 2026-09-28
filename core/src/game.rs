@@ -6,6 +6,7 @@ use crate::card::{card_display, Card, Edition, Enhancement, Seal, Suit, Value};
 use crate::config::{Config, RngMode};
 use crate::consumable::{Consumable, ConsumableKind};
 use crate::deck::Deck;
+use crate::deck_variant;
 use crate::effect::{EffectRegistry, Effects, RuleFlag};
 use crate::error::{GameError, PlayHandError};
 use crate::hand::{HandRules, MadeHand, SelectHand};
@@ -250,7 +251,7 @@ impl Game {
         let mut game = Self {
             shop: Shop::new(),
             planetarium: Planetarium::new(),
-            deck: Deck::default(),
+            deck: Deck::new(),
             available: Available::default(),
             discarded: Vec::new(),
             tags: Vec::new(),
@@ -270,8 +271,14 @@ impl Game {
             ante_end: Ante::try_from(config.ante_end).unwrap_or(Ante::Eight),
             ante_current: ante_start,
             round: config.round_start,
-            plays: config.plays,
-            discards_remaining: config.discards,
+            // Both are re-derived by `begin_round`; seed them from the
+            // deck/stake-adjusted values so the pre-blind state matches.
+            plays: deck_variant::plays_per_round(config.plays, config.deck),
+            discards_remaining: deck_variant::discards_per_round(
+                config.discards,
+                config.deck,
+                config.stake,
+            ),
             reward: config.reward_base,
             money: config.money_start as i64,
             bankrupt_at: 0,
@@ -315,9 +322,28 @@ impl Game {
             backend,
             config,
         };
+        game.apply_deck_starting_state();
         game.backend.on_run_start();
         game.start_ante();
         game
+    }
+
+    /// The deck's opening card set and starting holdings.
+    ///
+    /// Run after the `Game` is otherwise built but before `on_run_start`, so
+    /// the real backend's lock table already sees the deck the run will
+    /// actually use — Abandoned and Checkered are shorter than 52, and the
+    /// lock table has to agree with that.
+    fn apply_deck_starting_state(&mut self) {
+        let deck = self.config.deck;
+        self.deck.extend(deck_variant::starting_cards(deck));
+        self.money += deck_variant::deck_money_bonus(deck);
+        for v in deck_variant::deck_starting_vouchers(deck) {
+            self.vouchers.redeem(v);
+        }
+        for c in deck_variant::deck_starting_consumables(deck) {
+            self.consumables.push(c);
+        }
     }
 
     pub fn start(&mut self) {
@@ -351,6 +377,7 @@ impl Game {
             .config
             .available
             .saturating_add(self.vouchers.hand_size_bonus())
+            .saturating_add_signed(deck_variant::deck_hand_size_delta(self.config.deck))
             .saturating_add_signed(self.joker_hand_size_bonus())
             .min(self.config.available_max);
         let base = base.saturating_add(self.tag_state.hand_size_bonus);
@@ -365,12 +392,14 @@ impl Game {
     /// jokers already counted in `config.joker_slots`.
     pub fn joker_slots(&self) -> usize {
         (self.config.joker_slots + self.vouchers.joker_slot_bonus())
+            .saturating_add_signed(deck_variant::deck_joker_slot_delta(self.config.deck))
             .min(self.config.joker_slots_max)
     }
 
     /// Consumable slots — Crystal Ball adds one.
     pub fn consumable_slots(&self) -> usize {
-        self.config.consumable_slots + self.vouchers.consumable_slot_bonus()
+        (self.config.consumable_slots + self.vouchers.consumable_slot_bonus())
+            .saturating_add_signed(deck_variant::deck_consumable_slot_delta(self.config.deck))
     }
 
     /// How many of the held consumables actually occupy a slot. A Negative
@@ -394,7 +423,7 @@ impl Game {
             return 1;
         }
         Self::apply_delta(
-            self.config.plays,
+            deck_variant::plays_per_round(self.config.plays, self.config.deck),
             self.vouchers.hands_delta() + self.joker_hands_delta(),
         )
         .max(1)
@@ -404,7 +433,11 @@ impl Game {
     /// subtracts. May legitimately reach zero.
     pub fn discards_per_round(&self) -> usize {
         Self::apply_delta(
-            self.config.discards,
+            deck_variant::discards_per_round(
+                self.config.discards,
+                self.config.deck,
+                self.config.stake,
+            ),
             self.vouchers.discards_delta() + self.joker_discards_delta(),
         )
     }
@@ -1295,7 +1328,7 @@ impl Game {
     // Every card the player owns this run, regardless of whether it's
     // currently undrawn, in hand, or already discarded this round.
     // `self.deck` alone is only the undrawn remainder mid-round.
-    pub(crate) fn full_deck(&self) -> Vec<Card> {
+    pub fn full_deck(&self) -> Vec<Card> {
         let mut all = self.deck.cards();
         all.extend(self.available.cards());
         all.extend(self.discarded.clone());
@@ -1615,7 +1648,7 @@ impl Game {
     }
 
     pub fn required_score(&self) -> usize {
-        let base = self.ante_current.base();
+        let base = self.ante_base();
         match self.blind {
             None => base,
             Some(Blind::Small) => base,
@@ -1627,7 +1660,15 @@ impl Game {
     /// The score the upcoming Boss Blind will require, based on
     /// `current_boss`, valid before boss blind is active.
     pub fn boss_required_score(&self) -> usize {
-        self.ante_current.base() * Self::boss_score_multiplier(self.current_boss)
+        self.ante_base() * Self::boss_score_multiplier(self.current_boss)
+    }
+
+    /// The ante's base score, from the table for this run's scaling level.
+    /// Green and Purple stakes and the Plasma Deck each raise it, so this
+    /// reads the run's effective scaling rather than a fixed table.
+    pub fn ante_base(&self) -> usize {
+        let scaling = deck_variant::effective_scaling(self.config.deck, self.config.stake);
+        deck_variant::ante_base(scaling, self.ante_current.number())
     }
 
     fn boss_score_multiplier(boss: Option<BossBlind>) -> usize {
@@ -1639,21 +1680,52 @@ impl Game {
         }
     }
 
+    /// What cashing out of the current round would pay, without doing it.
+    /// Read by the UIs to show the reward before the player commits, and by
+    /// the deck/stake tests.
+    pub fn cashout_reward(&self, blind: Blind) -> usize {
+        self.calc_reward_for(blind)
+    }
+
     fn calc_reward(&mut self, blind: Blind) -> Result<usize, GameError> {
+        Ok(self.calc_reward_for(blind))
+    }
+
+    fn calc_reward_for(&self, blind: Blind) -> usize {
         // Interest is earned, never charged, so a balance in debt earns
-        // none rather than a negative amount.
-        let mut interest = (self.money.max(0) as f32 * self.config.interest_rate).floor() as usize;
+        // none rather than a negative amount. Green Deck's `no_interest`
+        // replaces the table outright, and To the Moon's interest is
+        // additional to it.
+        let interest_table = !deck_variant::deck_denies_interest(self.config.deck);
+        let mut interest = if interest_table {
+            (self.money.max(0) as f32 * self.config.interest_rate).floor() as usize
+        } else {
+            0
+        };
         let interest_max = self.interest_max();
         if interest > interest_max {
             interest = interest_max
         }
-        let base = blind.reward();
+        // Red Stake and above sets `no_blind_reward.Small`, transcribed from
+        // the real game's stake table.
+        let mut base = blind.reward();
+        if blind == Blind::Small && deck_variant::stake_denies_small_reward(self.config.stake) {
+            base = 0;
+        }
         let hand_bonus = self.plays * self.config.money_per_hand;
         // To the Moon's interest is additional to, and uncapped by, the
         // normal interest table.
         let to_the_moon = self.joker_interest_bonus();
-        let reward = base + interest + hand_bonus + to_the_moon;
-        Ok(reward)
+        let mut reward = base + interest + hand_bonus + to_the_moon;
+        // Green Deck pays $2 per unspent hand and $1 per unspent discard
+        // instead of interest: `extra_hand_bonus`/`extra_discard_bonus`.
+        if !interest_table {
+            reward += deck_variant::green_deck_end_of_round(
+                self.plays as i64,
+                self.discards_remaining as i64,
+            ) as usize;
+        }
+        reward
     }
 
     /// Collects one tag. Anything that fires later instead of now is
@@ -2813,6 +2885,8 @@ impl fmt::Display for Game {
             })
             .collect::<Vec<_>>()
             .join(" ");
+        writeln!(f, "deck variant: {}", self.config.deck.name())?;
+        writeln!(f, "stake: {}", self.config.stake.name())?;
         writeln!(f, "hand: {}", hand_str)?;
         writeln!(f, "discard pile: {}", self.discarded.len())?;
         let deck_cards = self.deck.cards();
@@ -4123,8 +4197,8 @@ mod tests {
         // Score should reset to 0
         assert_eq!(g.score, g.config.base_score);
         // Plays and discards should reset
-        assert_eq!(g.plays, g.config.plays);
-        assert_eq!(g.discards_remaining, g.config.discards);
+        assert_eq!(g.plays, g.plays_per_round());
+        assert_eq!(g.discards_remaining, g.discards_per_round());
         // All cards back in deck after clear_blind, available is empty
         assert_eq!(g.deck.len(), 52);
         // Discarded should be length 0
@@ -5951,11 +6025,15 @@ mod tests {
         // Per-round resources take effect at the start of the next round.
         redeem(&mut g, Voucher::Grabber);
         redeem(&mut g, Voucher::Wasteful);
-        assert_eq!(g.plays_per_round(), g.config.plays + 1);
-        assert_eq!(g.discards_per_round(), g.config.discards + 1);
+        // `g.config` is only the base now; the deck and stake add to it.
+        let base_plays = deck_variant::plays_per_round(g.config.plays, g.config.deck);
+        let base_discards =
+            deck_variant::discards_per_round(g.config.discards, g.config.deck, g.config.stake);
+        assert_eq!(g.plays_per_round(), base_plays + 1);
+        assert_eq!(g.discards_per_round(), base_discards + 1);
         g.clear_blind();
-        assert_eq!(g.plays, g.config.plays + 1);
-        assert_eq!(g.discards(), g.config.discards + 1);
+        assert_eq!(g.plays, base_plays + 1);
+        assert_eq!(g.discards(), base_discards + 1);
     }
 
     // Regression: `clear_blind` resets the per-round counters when a blind
@@ -5965,8 +6043,8 @@ mod tests {
     #[test]
     fn test_hand_vouchers_apply_to_the_very_next_blind() {
         let mut g = game_in_shop(100);
-        let base_plays = g.config.plays;
-        let base_discards = g.config.discards;
+        let base_plays = g.plays_per_round();
+        let base_discards = g.discards_per_round();
 
         redeem(&mut g, Voucher::Grabber);
         redeem(&mut g, Voucher::Wasteful);
@@ -6021,7 +6099,15 @@ mod tests {
         redeem(&mut g, Voucher::Hieroglyph);
         assert_eq!(g.ante_current, Ante::Two);
         assert_eq!(g.plays_per_round(), hands - 1);
-        assert_eq!(g.discards_per_round(), g.config.discards);
+        assert_eq!(
+            g.discards_per_round(),
+            deck_variant::discards_per_round(
+                g.config.discards,
+                g.config.deck,
+                g.config.stake
+            ),
+            "Hieroglyph costs a hand, not a discard"
+        );
     }
 
     #[test]

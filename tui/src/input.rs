@@ -1104,7 +1104,7 @@ mod tests {
     #[test]
     fn test_grabber_bought_in_shop_shows_up_on_the_next_blind() {
         let mut app = shop_app(Voucher::Grabber);
-        let base_plays = app.game.config.plays;
+        let base_plays = app.game.plays_per_round();
 
         app.focus = FocusZone::ShopPacks;
         app.cursor = app.game.shop.packs.len();

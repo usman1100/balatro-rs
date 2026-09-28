@@ -71,8 +71,6 @@ variable-length iterator.
 
 The following are missing and may or may not be added:
 
-- [ ] alternative decks
-- [ ] alternative stakes
 - [ ] sticker behavior (eternal/perishable/rental are data only)
 
 `RngMode::Real` drives shop, pack, voucher, tag, boss and effect-proc

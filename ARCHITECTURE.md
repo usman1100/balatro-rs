@@ -202,11 +202,50 @@ matters:
 `core/src/score.rs` is not where the math lives; it is the `ScoreTrace` that
 records every step, used by the `calc` binary to explain a score.
 
+## Decks and stakes
+
+`Config` carries a `deck: DeckVariant` and a `stake: Stake`, defaulting to Red
+Deck and White Stake, so an existing caller is unaffected. `core/src/deck_variant.rs`
+holds the rules; `Game` reads them through four seams — the starting card set,
+the per-round resources, the slot counts, and `calc_reward`.
+
+**The base values moved.** The real game's `get_starting_params` starts from 3
+discards, and the Red Deck's `discards = 1` is what makes an ordinary run have
+4. `Config::discards` had been 4 all along, meaning it already included the
+deck modifier. Applying the deck on top of that gave 5, so `DEFAULT_DISCARDS`
+is now 3 and every deck's own delta is counted once. This is the kind of thing
+that looks fine until a joker reads the number: Green Joker and Trading Card
+both compared against `config.discards` to work out how much of the round had
+been used, and both were silently off by one. They now use
+`discards_per_round()`.
+
+**Two limits are derived, not stored.** `plays_per_round` and
+`discards_per_round` read the deck and the stake, so a deck modifier reaches
+every round without anything having to remember to apply it. `Game::new` seeds
+both from the same functions, because the pre-blind state would otherwise
+start a round short of the deck's own grant.
+
+**Ante bases are per-scaling tables, not a formula.** Green and Purple stakes
+and the Plasma Deck each raise `modifiers.scaling`, and the real game holds a
+separate eight-entry table for each of the three levels rather than
+multiplying one. `deck_variant::ante_base` transcribes all three from
+`get_blind_amount`; `effective_scaling` takes the higher of the deck's and the
+stake's, since both write the same field.
+
+**What the deck and stake do *not* change.** The Black, Orange and Gold stakes
+enable eternal, perishable and rental stickers, and stickers are data-only in
+`core`, so those three stakes currently have no effect. The Erratic Deck
+randomises each card's rank and suit individually; the implementation reshuffles
+the existing values across the 52 cards instead, which is indistinguishable
+once the deck is shuffled but is not the real per-card draw. Both are noted in
+`CLAUDE.md` rather than left to be discovered.
+
 ## Coverage
 
 Behaviour implemented in `core`:
 
 - hand identification and scoring, all 13 ranks
+- all 15 deck variants and all 8 stakes
 - play / discard / reorder / sort
 - blind and ante progression, win and loss
 - money, interest, rewards

@@ -790,11 +790,13 @@ impl JokerEffects for Jokers {
             }
             Self::TradingCard(_) => {
                 // "First discard of round" == self.discards already
-                // decremented to config.discards - 1 by the time this fires
-                // (discard_selected decrements before invoking OnDiscard).
+                // decremented to the round's starting value minus one by the
+                // time this fires (discard_selected decrements before
+                // invoking OnDiscard). `discards_per_round` rather than the
+                // raw config, which is only the base.
                 fn apply(g: &mut Game, hand: MadeHand) {
                     if hand.all.len() == 1
-                        && g.discards_remaining == g.config.discards.saturating_sub(1)
+                        && g.discards_remaining == g.discards_per_round().saturating_sub(1)
                     {
                         g.destroy_card(hand.all[0].id);
                         g.money += 3;
@@ -803,11 +805,14 @@ impl JokerEffects for Jokers {
                 vec![Effects::OnDiscard(Arc::new(Mutex::new(apply)))]
             }
             Self::GreenJoker(_) => {
-                // config.plays/config.discards - remaining == used this
-                // round, both already reset to config values in clear_blind.
+                // The round's starting resources minus what's left == used
+                // this round, and `clear_blind` resets both to those same
+                // starting values. `plays_per_round`/`discards_per_round`
+                // rather than the raw config, which is only the base before
+                // the deck and stake add to it.
                 fn apply(g: &mut Game, _hand: MadeHand) {
-                    let hands_played = g.config.plays - g.plays;
-                    let discards_used = g.config.discards - g.discards_remaining;
+                    let hands_played = g.plays_per_round().saturating_sub(g.plays);
+                    let discards_used = g.discards_per_round().saturating_sub(g.discards_remaining);
                     let delta = hands_played as i64 - discards_used as i64;
                     g.mult = (g.mult as i64 + delta).max(0) as usize;
                 }
@@ -2919,7 +2924,9 @@ mod tests {
         g.shop.jokers.push(j2.clone());
         g.buy_joker(j2).unwrap();
         g.stage = Stage::Blind(Blind::Small);
+        // Banner reads the round's discards: 3 base + Red Deck's 1.
         // (5 + 11 + 4*30) * (1 * 3) = 136 * 3 = 408
+        assert_eq!(g.discards_per_round(), 4, "3 base plus Red Deck's one");
         assert_eq!(g.calc_score(best.clone()), 408);
     }
 
@@ -2947,6 +2954,7 @@ mod tests {
 
         // Banner: 4 discards * 30 chips = +120
         // (5 + 11 + 120) * 1 = 136
+        assert_eq!(g.discards_per_round(), 4, "3 base plus Red Deck's one");
         assert_eq!(g.calc_score(best.clone()), 136);
 
         g.discards_remaining = 0;
@@ -4658,6 +4666,7 @@ mod tests {
         let money_before = g.money;
         g.discard_selected().unwrap();
         // first discard of the round, exactly 1 card: destroyed + $3
+        assert_eq!(g.discards_per_round(), 4, "3 base plus Red Deck's one");
         assert_eq!(g.money, money_before + 3);
         assert!(!g.discarded.iter().any(|c| c.id == c1.id));
 

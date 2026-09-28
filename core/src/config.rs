@@ -1,9 +1,14 @@
+use balatro_types::{DeckVariant, Stake};
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 
 const DEFAULT_ROUND_START: usize = 0;
+// The real base is 4 hands; the Blue Deck adds a fifth.
 const DEFAULT_PLAYS: usize = 4;
-const DEFAULT_DISCARDS: usize = 4;
+// The real game's `get_starting_params` base is 3 discards; the Red Deck
+// adds the fourth. Kept as the base so a deck's own modifier is not
+// double-counted.
+const DEFAULT_DISCARDS: usize = 3;
 const DEFAULT_MONEY_START: usize = 0;
 const DEFAULT_MONEY_MAX: usize = 500;
 const DEFAULT_REWARD_BASE: usize = 0;
@@ -69,6 +74,12 @@ pub struct Config {
     pub seed: Option<u64>,
     pub seed_str: Option<String>,
     pub rng_mode: RngMode,
+    /// The starting deck, which decides the run's opening card set and
+    /// modifier. Defaults to Red, which is a plain 52-card deck.
+    pub deck: DeckVariant,
+    /// The difficulty stake. Each stake's modifier stacks on the ones below
+    /// it. Defaults to White, which adds nothing.
+    pub stake: Stake,
 }
 
 impl Config {
@@ -99,6 +110,8 @@ impl Config {
             discarded_max: DEFAULT_DISCARDED_MAX,
             seed: None,
             seed_str: None,
+            deck: DeckVariant::Red,
+            stake: Stake::White,
             rng_mode: RngMode::default(),
         }
     }

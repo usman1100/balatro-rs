@@ -142,6 +142,17 @@ impl GameState {
         self.game.seed_str.clone()
     }
 
+    /// The run's starting deck. `deck` is already the card list.
+    #[getter]
+    fn deck_variant(&self) -> String {
+        self.game.config.deck.name().to_string()
+    }
+
+    #[getter]
+    fn stake(&self) -> String {
+        self.game.config.stake.name().to_string()
+    }
+
     fn __repr__(&self) -> String {
         format!("GameState:\n{}", self.game)
     }
