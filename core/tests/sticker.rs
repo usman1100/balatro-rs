@@ -9,7 +9,6 @@ use balatro_rs::{
     config::Config,
     game::Game,
     joker::{Jokers, Stickers},
-    rank::HandRank,
     stage::{Blind, BlindExt, Stage},
     sticker,
 };

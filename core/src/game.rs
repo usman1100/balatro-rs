@@ -923,6 +923,13 @@ impl Game {
             card.face_down = down;
         }
         self.available.extend(drawn);
+        // The Fish's flag is sticky and covers the whole hand, not just the
+        // replacements, so cards already in hand are flipped too.
+        if self.active_boss() == Some(BossBlind::Fish) && self.boss_state.fish_prepped {
+            for card in self.available.select_all_mut() {
+                card.face_down = true;
+            }
+        }
         self.boss_force_selection();
     }
 
@@ -995,6 +1002,11 @@ impl Game {
         self.plays -= 1;
         self.hands_played_this_run += 1;
         self.hands_played_this_round += 1;
+        // The Fish's `prepped`, set by playing a hand rather than by
+        // counting one, so a discarded hand does not set it.
+        if self.active_boss() == Some(BossBlind::Fish) {
+            self.boss_state.fish_prepped = true;
+        }
         let selected = SelectHand::new(self.available.selected());
         let best = selected.best_hand_with(self.hand_rules())?;
         let rank = best.rank;
@@ -1328,9 +1340,13 @@ impl Game {
                 self.hand_ranks_played_this_round.is_empty() && self.discarded_this_round.is_empty()
             }
             Some(BossBlind::Mark) => self.is_face_card(card),
-            // The Fish: face down from the round's second hand onwards, so
-            // they accumulate in the deck face down.
-            Some(BossBlind::Fish) => self.hands_played_this_run > 0 || self.total_cards_discarded > 0,
+            // The Fish: the real game sets a sticky `prepped` flag when a
+            // hand is played and every card in hand is face down from then
+            // on, cleared only on the round reset. The previous read used the
+            // run-scoped hand and discard totals, which meant that from ante 2
+            // the flag was already true before the boss was even selected and
+            // every card in the round was face down.
+            Some(BossBlind::Fish) => self.boss_state.fish_prepped,
             // The Wheel flips a card face down as a side effect of its
             // edition roll, so the same 1-in-7 is drawn twice: once for
             // the edition, once for the flip.
@@ -1851,7 +1867,14 @@ impl Game {
             // $5 per blind skipped this run.
             Tag::Speed => self.money += 5 * self.blinds_skipped_this_run as i64,
             // Doubles money, but only ever adds up to $40.
-            Tag::Economy => self.money += self.money.min(40),
+            // `min(40)` is the tag's `config.max`, doubling at most $40. A
+            // negative balance is clamped to zero first, so a run in debt
+            // gains nothing rather than being charged double, and the
+            // result is floored at the debt line like every other money
+            // path.
+            Tag::Economy => {
+                self.money = (self.money + self.money.clamp(0, 40)).max(self.debt_floor())
+            }
             // Every Joker, consumable and pack in the next shop is free.
             Tag::Coupon => self.tag_state.coupon = true,
             // Duplicates the next tag collected.
@@ -4874,6 +4897,59 @@ mod tests {
     }
 
     #[cfg(feature = "serde")]
+    /// A save missing `Config` keys must still load. The TUI loads
+    /// user-supplied files, and a hand-edited or older save is a real case,
+    /// so a single absent key must not lose the whole run.
+    #[test]
+    fn test_from_json_backfills_missing_config_keys() {
+        let g = Game::default();
+        let mut value: serde_json::Value =
+            serde_json::from_str(&g.to_json().expect("serialize")).expect("parse");
+        let config = value
+            .as_object_mut()
+            .expect("game serializes to an object")
+            .get_mut("config")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("config serializes to an object");
+        // Strip a spread of keys, including the two enums and one added
+        // after this code was written.
+        for key in [
+            "deck",
+            "stake",
+            "plays",
+            "discards",
+            "money_start",
+            "ante_start",
+            "joker_slots",
+        ] {
+            assert!(config.remove(key).is_some(), "{key} was not present");
+        }
+
+        let json = serde_json::to_string(&value).expect("reserialize");
+        let g2 = Game::from_json(&json).expect("a partial config must still load");
+        assert_eq!(g2.config.deck, balatro_types::DeckVariant::Red);
+        assert_eq!(g2.config.stake, balatro_types::Stake::White);
+        assert_eq!(g2.config.plays, Config::new().plays);
+        assert_eq!(g2.config.discards, Config::new().discards);
+    }
+
+    /// An empty config object is the worst case: every key absent.
+    #[test]
+    fn test_from_json_backfills_an_empty_config_object() {
+        let g = Game::default();
+        let mut value: serde_json::Value =
+            serde_json::from_str(&g.to_json().expect("serialize")).expect("parse");
+        value
+            .as_object_mut()
+            .expect("game serializes to an object")
+            .insert("config".to_string(), serde_json::json!({}));
+
+        let json = serde_json::to_string(&value).expect("reserialize");
+        let g2 = Game::from_json(&json).expect("an empty config must still load");
+        assert_eq!(g2.config.plays, Config::new().plays);
+        assert_eq!(g2.plays_per_round(), g2.plays_per_round(), "and the run is usable");
+    }
+
     #[test]
     fn test_from_json_backfills_missing_current_boss() {
         let mut g = Game::default();
@@ -5638,6 +5714,21 @@ mod tests {
 
         let big = game_in_shop_with_tag_after(Tag::Economy, |g| g.money = 100);
         assert_eq!(big.money, 140, "100 doubles, but only 40 is added");
+
+        // A run in debt must not be charged double, and must not be pushed
+        // below the debt line. This is the only money path that was not
+        // clamped, so it is worth pinning in both directions.
+        let debt = game_in_shop_with_tag_after(Tag::Economy, |g| {
+            g.money = -20;
+            g.bankrupt_at = -20;
+        });
+        assert_eq!(debt.money, -20, "a debt balance gains nothing");
+
+        let rich_debt = game_in_shop_with_tag_after(Tag::Economy, |g| {
+            g.money = 10;
+            g.bankrupt_at = -20;
+        });
+        assert_eq!(rich_debt.money, 20, "a positive balance still doubles");
     }
 
     #[test]
@@ -6907,6 +6998,77 @@ mod tests {
                 card.suit
             );
         }
+    }
+
+    /// The Fish deals the first hand face up and everything after it face
+    /// down, within the round only. The run-scoped read this replaces meant
+    /// that from ante 2 the flag was already true before the boss was
+    /// selected, so the whole round was face down.
+    #[test]
+    fn test_fish_deals_face_up_until_a_hand_is_played() {
+        let mut g = game_in_boss_blind(BossBlind::Fish);
+        g.ante_current = Ante::Five;
+        // A run that has already played hands must not leak into this blind.
+        g.hands_played_this_run = 12;
+        g.total_cards_discarded = 30;
+
+        enter_boss_blind(&mut g);
+        assert!(
+            g.available.cards().iter().all(|c| !c.face_down),
+            "the first hand is face up even with a long run behind it"
+        );
+
+        select_and_play(&mut g, 5).expect("first hand");
+        assert!(
+            g.available.cards().iter().all(|c| c.face_down),
+            "once a hand is played the whole hand is face down, held cards \
+             included, because the real game's prepped flag is sticky"
+        );
+    }
+
+    /// The Fish counts hands only. Discarding does not start the face-down
+    /// draws, which the wiki's wording ("after each hand played") is explicit
+    /// about.
+    #[test]
+    fn test_fish_ignores_discards() {
+        let mut g = game_in_boss_blind(BossBlind::Fish);
+        enter_boss_blind(&mut g);
+        for card in g.available.cards().into_iter().take(3) {
+            g.select_card(card).expect("select");
+        }
+        g.discard_selected().expect("discard");
+        let drawn = g.available.cards();
+        assert!(
+            drawn.iter().all(|c| !c.face_down),
+            "a discard does not trigger the face-down draws"
+        );
+    }
+
+    /// The flag is round-scoped, so a new blind starts face up again.
+    #[test]
+    fn test_fish_resets_between_rounds() {
+        let mut g = game_in_boss_blind(BossBlind::Fish);
+        enter_boss_blind(&mut g);
+        select_and_play(&mut g, 5).expect("first hand");
+        assert!(
+            g.available
+                .cards()
+                .iter()
+                .any(|c| c.face_down),
+            "the replacements came face down"
+        );
+
+        g.round += 1;
+        g.begin_round(Blind::Boss);
+        assert!(
+            g.available.cards().iter().all(|c| !c.face_down),
+            "the next round starts face up again: {:?}",
+            g.available
+                .cards()
+                .iter()
+                .map(|c| c.face_down)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -3,8 +3,10 @@ use strum::EnumIter;
 /// Difficulty stakes, in ascending order. Each stake's modifiers stack on
 /// top of every stake before it.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash, EnumIter)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash, EnumIter, Default)]
 pub enum Stake {
+    /// The default: no difficulty modifiers.
+    #[default]
     White,
     Red,
     Green,

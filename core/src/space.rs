@@ -600,6 +600,11 @@ impl ActionSpace {
             {
                 Ok(Action::Reroll())
             }
+            n if !self.reroll_boss.is_empty()
+                && (self.reroll_boss_min()..=self.reroll_boss_max()).contains(&n) =>
+            {
+                Ok(Action::RerollBoss())
+            }
             n if !self.apply_spectral.is_empty()
                 && (self.apply_spectral_min()..=self.apply_spectral_max()).contains(&n) =>
             {
@@ -778,6 +783,89 @@ mod tests {
         assert!(a
             .to_action(a.apply_spectral_min(), &Game::default())
             .is_err()); // masked, not a panic
+    }
+
+    /// Every bit the generator sets must resolve to an action.
+    ///
+    /// This is the check that catches a bucket being added to `to_vec` and
+    /// unmasked without a matching arm in `to_action`, which is exactly what
+    /// happened to `reroll_boss`: the mask advertised it, `to_action` refused
+    /// it, and every test still passed because they only exercised buckets
+    /// that happened to line up.
+    ///
+    /// Conversion is checked rather than execution, because a mask is a
+    /// snapshot: two offered actions can conflict (a reroll spends the money
+    /// a buy needs), and failing on the second would be a test artefact
+    /// rather than a defect. Execution is checked separately in
+    /// `test_actions_gen_actions_all_execute`, one fresh game per action.
+    #[test]
+    fn test_every_unmasked_index_resolves_to_an_action() {
+        let mut checked = 0;
+        for seed in 0..40u64 {
+            for stage in shop_stages() {
+                let mut g = Game::new(crate::config::Config {
+                    seed: Some(seed),
+                    ..Default::default()
+                });
+                g.start();
+                g.vouchers.redeem(crate::voucher::Voucher::DirectorsCut);
+                g.vouchers.redeem(crate::voucher::Voucher::Retcon);
+                g.money = 500;
+                g.stage = stage;
+
+                let space = g.gen_action_space();
+                for (i, bit) in space.to_vec().iter().enumerate() {
+                    if *bit != 1 {
+                        continue;
+                    }
+                    space.to_action(i, &g).unwrap_or_else(|e| {
+                        panic!("seed {seed}: unmasked index {i} did not convert: {e}")
+                    });
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 100, "expected many actions, got {checked}");
+    }
+
+    /// Every action `gen_actions` yields must execute on a fresh copy of the
+    /// same game, so one action cannot invalidate another.
+    #[test]
+    fn test_actions_gen_actions_all_execute() {
+        let mut checked = 0;
+        for seed in 0..40u64 {
+            for stage in shop_stages() {
+                let mut g = Game::new(crate::config::Config {
+                    seed: Some(seed),
+                    ..Default::default()
+                });
+                g.start();
+                g.vouchers.redeem(crate::voucher::Voucher::DirectorsCut);
+                g.money = 500;
+                g.stage = stage;
+                let actions: Vec<_> = g.gen_actions().collect();
+                for action in actions {
+                    // A fresh game per action, so they cannot interfere.
+                    let mut fresh = Game::new(crate::config::Config {
+                        seed: Some(seed),
+                        ..Default::default()
+                    });
+                    fresh.start();
+                    fresh.vouchers.redeem(crate::voucher::Voucher::DirectorsCut);
+                    fresh.money = 500;
+                    fresh.stage = stage;
+                    fresh
+                        .handle_action(action.clone())
+                        .unwrap_or_else(|e| panic!("seed {seed}: {action:?} was offered but failed: {e:?}"));
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 100, "expected many actions, got {checked}");
+    }
+
+    fn shop_stages() -> [crate::stage::Stage; 2] {
+        [crate::stage::Stage::Shop(), crate::stage::Stage::PreBlind()]
     }
 
     #[test]

@@ -150,8 +150,9 @@ impl Available {
         });
     }
 
-    /// Every card, mutable. Used by the face-down bosses' test helper.
-    #[cfg(test)]
+    /// Every card, mutable. The Fish's sticky `prepped` flag flips the whole
+    /// hand, not just the cards it just drew, so this is needed in
+    /// production rather than only by tests.
     pub(crate) fn select_all_mut(&mut self) -> Vec<&mut Card> {
         self.cards.iter_mut().map(|(c, _)| c).collect()
     }

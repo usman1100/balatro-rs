@@ -22,12 +22,18 @@ pub(crate) struct BossState {
     /// The House: the first hand of the blind hasn't been dealt yet, so it
     /// is the one that comes up face down.
     pub(crate) first_hand_dealt: bool,
+    /// The Fish's `prepped` flag: set once a hand has been played, after
+    /// which every card in hand is face down. Sticky for the rest of the
+    /// round and cleared on the round reset, matching the real game's
+    /// `Blind:reset` / `bl_fish` handling.
+    pub(crate) fish_prepped: bool,
     /// Crimson Heart: the Joker debuffed for the hand being played.
     pub(crate) debuffed_joker: Option<Jokers>,
     /// Verdant Leaf: every card debuffed until a Joker is sold.
     pub(crate) all_cards_debuffed: bool,
-    /// Pillar: cards already played this ante. Rebuilt on save load, which
-    /// only ever restores the current ante's state.
+    /// Pillar: cards already played this ante. Serialized rather than
+    /// rebuilt, so it survives a save load; loading a save always restores
+    /// the current ante's state, so no reconciliation is needed.
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) played_this_ante: HashSet<usize>,
     /// Cerulean Bell: the card forced to stay selected.
@@ -47,6 +53,7 @@ impl BossState {
         self.last_played = None;
         self.locked_rank = None;
         self.first_hand_dealt = false;
+        self.fish_prepped = false;
         self.debuffed_joker = None;
         self.forced_card = None;
     }

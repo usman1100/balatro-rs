@@ -3,8 +3,10 @@ use strum::EnumIter;
 /// One of the 15 selectable starting decks, each with its own starting
 /// modifier.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash, EnumIter)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash, EnumIter, Default)]
 pub enum DeckVariant {
+    /// The default run: a plain 52-card deck with +1 discard.
+    #[default]
     Red,
     Blue,
     Yellow,

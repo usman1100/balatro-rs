@@ -53,8 +53,6 @@ pub enum GameError {
     NoAvailableSlot,
     #[error("Invalid balance")]
     InvalidBalance,
-    #[error("Invalid move card")]
-    InvalidMoveCard,
     #[error("Invalid select card")]
     InvalidSelectCard,
     #[error("Invalid action space")]
