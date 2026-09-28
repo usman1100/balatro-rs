@@ -154,9 +154,14 @@ evaluator cannot classify; it is checked, but there is no gameplay path.
   than panicking on `randint(0, -1)`, and `randweightedchoice` no longer runs
   off the end when the sentinel weight falls short of the sum. Both verified
   to catch their panics when the guards are removed.
-- Still open: `voucher_upgrade`'s `VOUCHERS[idx + 1]` pairing, which relies on
-  32 hand-maintained names being in upgrade order. Add one unpaired voucher
-  and it panics; swap two and it silently returns the wrong upgrade.
+- DONE: `voucher_upgrade`'s `VOUCHERS[idx + 1]` pairing. All sixteen pairs
+  were checked against the real game's own `requires = {'v_x'}` field with
+  zero mismatches, the table's shape (even length, disjoint halves) is
+  asserted, and the pairings are now spelled out literally — an earlier
+  version derived the expectation from the same table it was checking, which
+  agreed with a deliberately swapped pair; that was caught by testing the
+  test. `get` instead of `[]` so a future odd length is a `None` rather than a
+  panic.
 - DONE: the Big Blind's 1.5x is integer rather than `f32`, and the test pins
   the value instead of restating the expression it replaced.
 

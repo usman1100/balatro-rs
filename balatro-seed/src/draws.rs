@@ -14,15 +14,22 @@ pub enum ShopItem {
 }
 
 /// Given a drawn base voucher, returns its upgrade tier if one exists.
-/// `VOUCHERS` is laid out as (base, upgrade) pairs at consecutive indices.
+///
+/// `VOUCHERS` is laid out as (base, upgrade) pairs at consecutive indices,
+/// which is what `VOUCHERS_are_paired_upgrades` pins: an odd-length table
+/// would index past the end, and a table whose pairs are mis-ordered would
+/// silently return the wrong upgrade. Neither is visible from here.
 pub fn voucher_upgrade(voucher: Voucher) -> Option<Voucher> {
     let name = voucher.name();
     let idx = pools::VOUCHERS.iter().position(|&n| n == name)?;
-    if idx % 2 == 0 {
-        resolve::resolve_voucher(pools::VOUCHERS[idx + 1])
-    } else {
-        None
+    if idx % 2 != 0 {
+        return None;
     }
+    // `get` rather than `[idx + 1]`: an odd-length table is a table mistake,
+    // and this is a `pub` function.
+    pools::VOUCHERS
+        .get(idx + 1)
+        .and_then(|n| resolve::resolve_voucher(n))
 }
 
 /// Decodes a drawn pack name into its typed category and size.

@@ -390,6 +390,84 @@ mod tests {
     /// loop is now clamped, but the invariant is still worth asserting: it is
     /// the thing the clamp is a fallback *for*, and a table that violates it
     /// would be biased rather than merely unsafe.
+    /// `voucher_upgrade` reads `VOUCHERS` as (base, upgrade) pairs at
+    /// consecutive indices. All sixteen pairs were checked against the real
+    /// game's own `requires = {'v_x'}` field and are correct, so this pins
+    /// the table's *shape* as well: an odd length would index past the end,
+    /// and a swapped pair would return the wrong upgrade while still
+    /// looking fine.
+    #[test]
+    fn VOUCHERS_are_paired_upgrades() {
+        assert_eq!(
+            VOUCHERS.len() % 2,
+            0,
+            "the table is (base, upgrade) pairs, so its length is even"
+        );
+        assert_eq!(VOUCHERS.len(), 32, "16 base/upgrade pairs");
+
+        // Every base resolves, and every upgrade resolves, and the two halves
+        // are disjoint — a name in both positions would mean the pairing had
+        // been rotated.
+        for pair in VOUCHERS.chunks(2) {
+            let (base, upgrade) = (pair[0], pair[1]);
+            assert!(
+                resolve::resolve_voucher(base).is_some(),
+                "{base} does not resolve"
+            );
+            assert!(
+                resolve::resolve_voucher(upgrade).is_some(),
+                "{upgrade} does not resolve"
+            );
+        }
+        let (bases, upgrades): (Vec<_>, Vec<_>) = VOUCHERS.chunks(2)
+            .map(|c| (c[0], c[1]))
+            .unzip();
+        for base in &bases {
+            assert!(
+                !upgrades.contains(base),
+                "{base} is both a base and an upgrade, so the table is rotated"
+            );
+        }
+
+        // The pairings themselves, spelled out. Deriving the expectation
+        // from the same table it checks would agree with any edit to that
+        // table, which is the exact failure this is here to catch.
+        const PAIRS: &[(&str, &str)] = &[
+            ("Overstock", "Overstock Plus"),
+            ("Clearance Sale", "Liquidation"),
+            ("Hone", "Glow Up"),
+            ("Reroll Surplus", "Reroll Glut"),
+            ("Crystal Ball", "Omen Globe"),
+            ("Telescope", "Observatory"),
+            ("Grabber", "Nacho Tong"),
+            ("Wasteful", "Recyclomancy"),
+            ("Tarot Merchant", "Tarot Tycoon"),
+            ("Planet Merchant", "Planet Tycoon"),
+            ("Seed Money", "Money Tree"),
+            ("Blank", "Antimatter"),
+            ("Magic Trick", "Illusion"),
+            ("Hieroglyph", "Petroglyph"),
+            ("Director's Cut", "Retcon"),
+            ("Paint Brush", "Palette"),
+        ];
+        let ours: Vec<(&str, &str)> = VOUCHERS.chunks(2).map(|p| (p[0], p[1])).collect();
+        assert_eq!(ours, PAIRS, "the (base, upgrade) pairs are wrong");
+
+        // And the pairing is what the function returns, checked both ways.
+        for (i, base) in bases.iter().enumerate() {
+            let v = resolve::resolve_voucher(base).expect("resolves");
+            let up = crate::draws::voucher_upgrade(v).expect("has an upgrade");
+            assert_eq!(up.name(), upgrades[i], "{base} upgrades to the wrong thing");
+        }
+        for upgrade in &upgrades {
+            let v = resolve::resolve_voucher(upgrade).expect("resolves");
+            assert!(
+                crate::draws::voucher_upgrade(v).is_none(),
+                "{upgrade} is an upgrade and must not upgrade further"
+            );
+        }
+    }
+
     #[test]
     fn pack_weights_are_all_positive() {
         for (name, weight) in &PACKS[1..] {
