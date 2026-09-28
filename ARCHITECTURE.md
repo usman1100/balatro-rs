@@ -318,10 +318,19 @@ Not implemented:
 
 ## Testing
 
-- `cargo test` — the whole workspace. Roughly 500 unit tests live beside the
-  code in `#[cfg(test)]` modules; `core/tests/test.rs` has the full-run
-  integration tests.
+- `cargo test` — the whole workspace, around 820 tests. Most live beside the
+  code in `#[cfg(test)]` modules; `core/tests/` holds the end-to-end ones and
+  `balatro-seed/tests/golden.rs` the seed fixtures.
+- `BALATRO_SOAK_GAMES=2000 cargo test -p balatro-rs --test test` — the soak.
+  Every run is seeded, so a failure replays; the two move APIs each play
+  complete runs and assert that every action they offer executes.
 - `cargo run -p balatro-seed --bin explore -- SEED --ante N` prints a seed's
   expected contents in the same text format as the TheSoul/Immolate reference
-  site, so output can be diffed directly against the real game.
+  site, so output can be diffed directly against the real game. Its output is
+  pinned under `balatro-seed/tests/golden/`; see `TEST_PLAN.md` for what
+  those fixtures do and do not prove.
+- `TEST_PLAN.md` is the audit that drove the current test suite: what was
+  unverified, what was wrong, and what is deliberately still open.
 - `cargo bench -p balatro-rs` — plays a whole game on random moves.
+- CI runs clippy with `-D warnings` and `cargo fmt --check`, so neither can
+  rot, plus the soak at 2000 and a real Python build.

@@ -6,6 +6,47 @@ risk, not by effort.
 
 Status legend: `TODO` / `DOING` / `DONE` / `WONTFIX` (with a reason).
 
+## Where this ended up
+
+Six commits, 8 defect fixes, and the workspace went from 776 to 818 tests.
+The defects, in the order they were found:
+
+1. `to_action` had no arm for `reroll_boss` — the action space advertised an
+   action that always failed.
+2. The Fish used run totals for a round-scoped rule, so every card was face
+   down for the whole boss round.
+3. `Tag::Economy` could push the balance below the debt floor, the only
+   unclamped money path.
+4. `Config` had no `serde(default)`, so one missing key lost a whole run.
+5. `Jokers::eq` ignored `state.counter` and `sell_bonus`, so a round trip
+   could lose a Ramen tally and the natural assertion would still pass.
+6. `chips * mult` was an unchecked multiply fed from the balance by Bull.
+7. `gen_planet` recursed on itself and could panic on an empty candidate set.
+8. `pylatro` did not compile at all — `money` had been `i64` since Credit
+   Card and the binding still returned `usize`.
+9. `available_max: 0` underflowed a `vec!` length, in the first thing every
+   caller does.
+
+Three things are worth calling out about how they were found, because they
+are the reusable part:
+
+**Tests that assert nothing are worse than no tests.** The two 1000-game
+soaks were `#[ignore]`d, unseeded, and broke out of the loop on a failing
+action without failing. The python smoke tests compiled to nothing and
+reported "0 passed". Six real-data tests iterated gitignored private files.
+Each now either runs or says loudly that it did not.
+
+**Verify the test.** A test can pass while asserting nothing, and three of
+the ones written here did before being caught: the accumulator-family test
+registered no jokers, so no closure ran and the counter never moved; the
+voucher-pairing test derived its expectation from the table it was checking;
+and the "known" hand-level values came from a regex that matched the wrong
+field, which had me briefly change a correct value to a wrong one. Each was
+found by deliberately breaking the thing it claimed to protect.
+
+**A test failing on a "fix" is a signal.** Two of my own changes broke tests
+and the tree was right both times.
+
 ## Tier 0 — defects found by reading, fix before anything else
 
 | # | Risk | Where | Status |
