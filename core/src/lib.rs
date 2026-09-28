@@ -39,9 +39,10 @@ pub mod voucher;
 #[cfg(test)]
 mod tests {
     use crate::action::Action;
+    use crate::config::Config;
     use crate::consumable::{Consumable, ConsumableKind};
-    use crate::stage::{Blind, End};
     use crate::error::GameError;
+    use crate::stage::{Blind, End};
     use crate::game::Game;
     use crate::planet::Planets;
     use crate::rank::HandRank;
@@ -355,6 +356,62 @@ mod tests {
     /// rule and the copies drifted: the action-space copy let a hand-touching
     /// Spectral out during a blind-less stage, and `handle_action` then
     /// rejected it. Pin both against the same predicate.
+    /// The two public move APIs must offer the same set of actions.
+    ///
+    /// This is the crate's central contract and nothing else checks it: the
+    /// only prior test compared one action variant, and the `reroll_boss`
+    /// bucket existed in the mask with no `to_action` arm at all, which is
+    /// exactly the kind of divergence this catches.
+    ///
+    /// The comparison is on the action sets, not the indices, so it is
+    /// independent of the layout of the space.
+    #[test]
+    fn test_the_two_move_apis_offer_the_same_actions() {
+        for seed in 0..25u64 {
+            let mut g = Game::new(Config {
+                seed: Some(seed),
+                ..Config::default()
+            });
+            g.start();
+            // Walk the run a little so the later stages are represented.
+            for _ in 0..6 {
+                if g.is_over() {
+                    break;
+                }
+                let space = g.gen_action_space();
+                let from_space: std::collections::HashSet<Action> = space
+                    .to_vec()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| **m == 1)
+                    .filter_map(|(i, _)| space.to_action(i, &g).ok())
+                    .collect();
+                let from_generator: std::collections::HashSet<Action> = g.gen_actions().collect();
+
+                let only_space: Vec<_> = from_space.difference(&from_generator).collect();
+                let only_generator: Vec<_> = from_generator.difference(&from_space).collect();
+                assert!(
+                    only_space.is_empty() && only_generator.is_empty(),
+                    "seed {seed}, stage {:?}: only in the space {only_space:?}, only in the generator {only_generator:?}",
+                    g.stage
+                );
+
+                if from_generator.is_empty() {
+                    break;
+                }
+                // Pick deterministically rather than with a thread rng, so a
+                // failure reproduces.
+                let mut actions: Vec<Action> = from_generator.into_iter().collect();
+                actions.sort_by_key(|a| format!("{a}"));
+                if g.handle_action(actions[seed as usize % actions.len()].clone())
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_both_move_apis_agree_on_usable_consumables() {
         use crate::card::{Card, Suit, Value};

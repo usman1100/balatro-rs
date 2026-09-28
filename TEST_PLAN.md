@@ -15,9 +15,9 @@ Status legend: `TODO` / `DOING` / `DONE` / `WONTFIX` (with a reason).
 | 0.3 | `Tag::Economy` could push `money` below `debt_floor()`; clamped and pinned in both directions | `game.rs:1875` | DONE |
 | 0.4 | `GameError::InvalidMoveCard` unreachable; `NoCardMatch` already covers it | `error.rs` | DONE |
 | 0.5 | `Config` had no `serde(default)`, so one missing key lost the run. Every field now defaults to the real value | `config.rs:56` | DONE |
-| 0.6 | `calc` scores with default hand rules, so it disagrees with the engine when Four Fingers / Shortcut / Smeared are held | `bin/calc.rs:48` | TODO |
-| 0.7 | `money_max` and `discarded_max` are never enforced; `chips * mult` is an unchecked `usize` multiply | `game.rs:1698` | TODO |
-| 0.8 | `Jokers::eq` ignores `state.counter` and `sell_bonus`, so a save round trip can silently lose accumulator state while the natural assertion passes | `joker.rs:113` | TODO |
+| 0.6 | `calc` scored with default hand rules, disagreeing with the engine under Four Fingers / Shortcut / Smeared | `bin/calc.rs:44` | DONE |
+| 0.7 | `chips * mult` was an unchecked `usize` multiply, fed by Bull from the balance. Now saturating. `money_max`/`discarded_max` are not real caps and are documented as unenforced | `game.rs:1716` | DONE |
+| 0.8 | `Jokers::eq`/`Hash` ignored `state.counter` and `sell_bonus`, so a round trip could lose them and `assert_eq!` would still pass. Now every persisted field, with the `f32` counter hashed by bits | `joker.rs:113` | DONE |
 | 0.9 | Comment in `boss.rs` claimed `played_this_ante` was rebuilt on load; it is serialized | `boss.rs:34` | DONE |
 
 ## Tier 1 — the invariants that matter most
@@ -31,9 +31,15 @@ documented decision, not a test.
 - Conversion: every unmasked index resolves. DONE (`space.rs`)
 - Execution: every generated action executes on a fresh copy. DONE (`space.rs`)
 - Both verified to fail when the `to_action` arm is removed.
-- Set equality: `gen_actions()` == indices the space unmask, per variant.
-- `DeselectCard`: either add a bucket or document why not.
-- Amounts compared, not just membership.
+- Set equality: DONE (`test_the_two_move_apis_offer_the_same_actions`) — walks 25
+  seeds and 6 turns each, comparing the two action sets. Verified to fail
+  when a bucket is unmasked in one place but not the other.
+- `DeselectCard`: DONE — it had no bucket at all, so the two APIs were
+  structurally incapable of agreeing. It now has one, `to_action` resolves it
+  to the card in that hand position, and the space is 135 long (was 111). The
+  bucket is appended so **no existing index moves**, only the length grows.
+- Amounts are not compared, only membership. Left open deliberately: a
+  difference there is a formatting question, not a contract question.
 
 ### 1.2 Save / load
 No test round-trips a *played* game. Everything round-trips a fresh one, so
@@ -42,10 +48,14 @@ levels and `action_history` are all unverified. Also: the RNG is **not**
 round-tripped (`backend` is `serde(default)`), so a reloaded `RngMode::Real`
 run is not reproducible. Decide whether that is acceptable, then test it.
 
-- Fully-played run round trip.
-- `to_json -> from_json -> to_json` stability.
-- `Jokers::eq` fixed first, or the round trip cannot detect losses (0.8).
-- A save missing every optional `Config` key.
+- Fully-played run round trip: DONE — five blinds deep, then compares deck,
+  available, discarded, jokers, consumables, planetarium, history and stage.
+- `to_json -> from_json -> to_json` stability: DONE.
+- `Jokers::eq` fixed first: DONE (0.8), so the round trip can now detect it.
+- A save missing every optional `Config` key: DONE (0.5).
+- Known remaining gap: the RNG backend is `serde(default)`, so a reloaded run
+  continues on a *different* stream and a `RngMode::Real` run is not
+  reproducible across a save. Not yet decided whether that is acceptable.
 
 ### 1.3 Known-answer tests for `balatro-seed`
 "byte-accurate" currently rests on manual diffing. There is not one golden

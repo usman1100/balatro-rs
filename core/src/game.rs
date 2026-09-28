@@ -1710,8 +1710,11 @@ impl Game {
         // record after joker loop, not before (for CardSharp)
         self.hand_ranks_played_this_round.insert(hand.rank);
 
-        // compute score
-        let score = self.chips * self.mult;
+        // Saturating, because chips is fed directly from the balance by Bull
+        // (`chips += money * 2`) and a long run can make a plain `*` wrap.
+        // Wrapping here would turn a big score into a small one and let a
+        // blind be beaten that should not be.
+        let score = self.chips.saturating_mul(self.mult);
 
         // reset chips and mult
         self.mult = self.config.base_mult;
@@ -4875,6 +4878,130 @@ mod tests {
         assert_eq!(g2.money, g.money);
         assert_eq!(g2.available.cards().len(), g.available.cards().len());
         assert_eq!(g2.deck.len(), g.deck.len());
+    }
+
+    /// A *played* run must round-trip, not just a fresh one. Every existing
+    /// round-trip test starts from `Game::default()`, which leaves the open
+    /// pack, the populated boss state, the planetarium levels, the mutated
+    /// deck and the action history all at their defaults, so none of them
+    /// exercises any of it.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_a_played_run_round_trips() {
+        let mut g = Game::new(Config {
+            seed: Some(TAG_TEST_SEED),
+            ..Config::default()
+        });
+        g.start();
+        // Build up real state: play into ante 2, level a hand, hold jokers,
+        // redeem vouchers, and open a pack.
+        // Play every blind of ante 1, then the first two of ante 2, so the
+        // run has a real history rather than a starting position.
+        for _ in 0..5 {
+            // The shop sits between blinds, so advance to the next round
+            // before trying to select the following blind.
+            if g.stage == Stage::Shop() {
+                g.handle_action(Action::NextRound()).expect("next round");
+            }
+            if !g
+                .gen_actions()
+                .any(|a| matches!(a, Action::SelectBlind(_)))
+            {
+                break;
+            }
+            let next = match g.blind {
+                None => Blind::Small,
+                Some(b) => b.next(),
+            };
+            g.handle_action(Action::SelectBlind(next)).expect("select");
+            for card in g.available.cards() {
+                g.handle_action(Action::SelectCard(card)).ok();
+            }
+            g.score += g.required_score();
+            g.handle_action(Action::Play()).expect("play");
+            if g.gen_actions().any(|a| matches!(a, Action::CashOut(_))) {
+                g.handle_action(Action::CashOut(0)).expect("cash out");
+            } else {
+                break;
+            }
+        }
+        // Some state that only a played run has.
+        g.planetarium.level_up(HandRank::TwoPair);
+        g.planetarium.level_up(HandRank::TwoPair);
+        g.jokers.push(Jokers::TheJoker(Default::default()));
+        g.vouchers.redeem(Voucher::Grabber);
+        g.consumables
+            .push(crate::consumable::Consumable::tarot(crate::tarot::Tarot::Fool));
+        assert!(g.ante_current > Ante::One, "the run should have advanced");
+        assert!(!g.action_history.is_empty());
+
+        let json = g.to_json().expect("serialize");
+        let loaded = Game::from_json(&json).expect("deserialize");
+
+        assert_eq!(loaded.ante_current, g.ante_current, "ante");
+        assert_eq!(loaded.round, g.round, "round");
+        assert_eq!(loaded.money, g.money, "money");
+        assert_eq!(loaded.deck.cards(), g.deck.cards(), "deck");
+        assert_eq!(
+            loaded.available.cards(),
+            g.available.cards(),
+            "available"
+        );
+        assert_eq!(loaded.discarded, g.discarded, "discarded");
+        assert_eq!(loaded.jokers, g.jokers, "jokers");
+        assert_eq!(loaded.consumables, g.consumables, "consumables");
+        assert_eq!(
+            loaded.planetarium.level(HandRank::TwoPair).level,
+            g.planetarium.level(HandRank::TwoPair).level,
+            "planetarium"
+        );
+        assert_eq!(loaded.action_history, g.action_history, "history");
+        assert_eq!(loaded.stage, g.stage, "stage");
+        assert_eq!(loaded.hands_played_this_run, g.hands_played_this_run, "hands");
+    }
+
+    /// Serialization must be stable: the second write is byte-identical to
+    /// the first, or a save/load cycle silently rewrites the file.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_json_is_stable_across_a_round_trip() {
+        let mut g = game_in_shop(100);
+        g.jokers.push(Jokers::TheJoker(Default::default()));
+        let once = g.to_json().expect("serialize");
+        let twice = Game::from_json(&once)
+            .expect("deserialize")
+            .to_json()
+            .expect("reserialize");
+        assert_eq!(once, twice, "a round trip must not rewrite the save");
+    }
+
+    /// A joker's accumulator and sell bonus are the state most likely to be
+    /// lost in a round trip, so they are pinned directly rather than relying
+    /// on a whole-run comparison.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_joker_counters_and_sell_bonus_round_trip() {
+        let mut g = game_in_shop(100);
+        let mut ramen = Jokers::Ramen(Default::default());
+        ramen.state_mut().counter = 13.0;
+        let mut egg = Jokers::Egg(Default::default());
+        egg.add_sell_bonus(7);
+        g.jokers = vec![ramen.clone(), egg.clone()];
+
+        let json = g.to_json().expect("serialize");
+        let loaded = Game::from_json(&json).expect("deserialize");
+        assert_eq!(loaded.jokers[0].state().counter, 13.0, "Ramen's tally");
+        assert_eq!(loaded.jokers[1].sell_bonus(), 7, "Egg's sell bonus");
+        assert_eq!(loaded.jokers, g.jokers, "and equality sees them");
+
+        // And equality must actually distinguish them, or the assertion
+        // above would pass even with a lossy round trip.
+        let mut changed = ramen.clone();
+        changed.state_mut().counter = 14.0;
+        assert_ne!(changed, ramen, "a different tally is a different joker");
+        let mut changed = egg.clone();
+        changed.add_sell_bonus(1);
+        assert_ne!(changed, egg, "a different sell bonus is a different joker");
     }
 
     #[cfg(feature = "serde")]

@@ -66,14 +66,47 @@ pub enum SelectorValue {
 /// `counter` covers accumulator-style jokers (Hologram, Ramen, LuckyCat, ...).
 /// `selector` covers rotating-selector jokers.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct JokerState {
+    /// Hashed via its bit pattern rather than as a float, so that `Eq` and
+    /// `Hash` agree. `f32` has no `Eq`, and comparing NaN would make the
+    /// `Eq` contract a lie.
     pub counter: f32,
     pub selector: Option<SelectorValue>,
     /// The Idol locks onto a specific card, so it needs both a rank and a
     /// suit. Nothing else uses this.
     #[cfg_attr(feature = "serde", serde(default))]
     pub selector2: Option<SelectorValue>,
+}
+
+impl JokerState {
+    /// NaN never arises from gameplay — every counter is a sum of integers
+    /// or a small multiplier — but a NaN would make `a == a` false and so
+    /// violate `Eq`. Treating every NaN as equal keeps the contract without
+    /// needing a total order.
+    fn counter_eq(a: f32, b: f32) -> bool {
+        a == b || (a.is_nan() && b.is_nan())
+    }
+}
+
+impl PartialEq for JokerState {
+    fn eq(&self, other: &Self) -> bool {
+        Self::counter_eq(self.counter, other.counter)
+            && self.selector == other.selector
+            && self.selector2 == other.selector2
+    }
+}
+
+impl Eq for JokerState {}
+
+impl std::hash::Hash for JokerState {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // The bit pattern keeps `k1 == k2 -> hash equal` true, including for
+        // the two distinct NaN payloads, which `counter_eq` treats as equal.
+        self.counter.to_bits().hash(state);
+        self.selector.hash(state);
+        self.selector2.hash(state);
+    }
 }
 
 /// `Jokers` is the definitive static repr of all jokers in the game.
@@ -110,12 +143,26 @@ macro_rules! make_jokers {
             pub sell_bonus: usize,
         }
 
+        /// Every persisted field, not just the identifying ones.
+        ///
+        /// `state.counter` (Ramen, Hologram, Lucky Cat, Ice Cream, Ancient
+        /// Joker) and `sell_bonus` (Egg, Gift Card) used to be excluded,
+        /// which meant a save round trip could silently drop them and
+        /// `assert_eq!(loaded.jokers, g.jokers)` would still pass — the
+        /// natural assertion for that test was blind to exactly the state
+        /// most likely to be lost.
+        ///
+        /// The counter is an `f32` scaled to bits rather than hashed
+        /// directly, so `Eq` and `Hash` stay consistent: NaN would break the
+        /// `Eq` contract, and a lossy float hash would break the
+        /// `k1 == k2 -> hash(k1) == hash(k2)` one.
         impl PartialEq for $x {
             fn eq(&self, other: &Self) -> bool {
                 self.instance_id == other.instance_id
                     && self.edition == other.edition
                     && self.stickers == other.stickers
-                    && self.state.selector == other.state.selector
+                    && self.state == other.state
+                    && self.sell_bonus == other.sell_bonus
             }
         }
         impl Eq for $x {}
@@ -124,7 +171,8 @@ macro_rules! make_jokers {
                 self.instance_id.hash(state);
                 self.edition.hash(state);
                 self.stickers.hash(state);
-                self.state.selector.hash(state);
+                self.state.hash(state);
+                self.sell_bonus.hash(state);
             }
         }
         )*

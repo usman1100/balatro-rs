@@ -42,13 +42,21 @@ const PACK_CONTENTS_MAX: usize = 5;
 // 109: reroll boss
 // 110: apply spectral
 //
-// We end up with a vector of length 111 where each index
+// We end up with a vector of length 135 where each index
 // represents a potential action.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "python", pyclass(eq))]
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct ActionSpace {
     pub select_card: Vec<usize>,
+    /// Deselecting a card had no bucket at all, so the two public move APIs
+    /// were structurally incapable of agreeing: `gen_actions` offered
+    /// `DeselectCard` and the action space had nowhere to put it. Appended
+    /// after `apply_spectral` rather than next to `select_card` so the index
+    /// of every existing action is unchanged for anyone with a trained
+    /// policy — the vector length grows from 111 to 112, but no previously
+    /// valid index moves.
+    pub deselect_card: Vec<usize>,
     pub move_card_left: Vec<usize>,
     pub move_card_right: Vec<usize>,
     pub play: Vec<usize>,
@@ -77,6 +85,7 @@ pub struct ActionSpace {
 impl ActionSpace {
     pub fn size(&self) -> usize {
         self.select_card.len()
+            + self.deselect_card.len()
             + self.move_card_left.len()
             + self.move_card_right.len()
             + self.play.len()
@@ -108,6 +117,14 @@ impl ActionSpace {
 
     fn select_card_max(&self) -> usize {
         self.select_card_min() + self.select_card.len() - 1
+    }
+
+    fn deselect_card_min(&self) -> usize {
+        self.apply_spectral_min() + self.apply_spectral.len()
+    }
+
+    fn deselect_card_max(&self) -> usize {
+        self.deselect_card_min() + self.deselect_card.len().saturating_sub(1)
     }
 
     fn move_card_left_min(&self) -> usize {
@@ -301,6 +318,14 @@ impl ActionSpace {
             return Err(ActionSpaceError::InvalidIndex);
         }
         self.select_card[i] = 1;
+        Ok(())
+    }
+
+    pub(crate) fn unmask_deselect_card(&mut self, i: usize) -> Result<(), ActionSpaceError> {
+        if i >= self.deselect_card.len() {
+            return Err(ActionSpaceError::InvalidIndex);
+        }
+        self.deselect_card[i] = 1;
         Ok(())
     }
 
@@ -610,6 +635,18 @@ impl ActionSpace {
             {
                 Ok(Action::ApplySpectral())
             }
+            n if !self.deselect_card.is_empty()
+                && (self.deselect_card_min()..=self.deselect_card_max()).contains(&n) =>
+            {
+                // Resolved to the card in that hand position, the mirror of
+                // how `select_card` resolves.
+                let idx = n - self.deselect_card_min();
+                let cards = game.available.cards_and_selected();
+                match cards.get(idx) {
+                    Some((card, _)) => Ok(Action::DeselectCard(*card)),
+                    None => Err(ActionSpaceError::InvalidActionConversion),
+                }
+            }
             _ => Err(ActionSpaceError::InvalidActionConversion),
         }
     }
@@ -640,6 +677,7 @@ impl ActionSpace {
             self.reroll.clone(),
             self.reroll_boss.clone(),
             self.apply_spectral.clone(),
+            self.deselect_card.clone(),
         ]
         .concat()
     }
@@ -680,6 +718,8 @@ impl From<Config> for ActionSpace {
             reroll: vec![0; 1],
             reroll_boss: vec![0; 1],
             apply_spectral: vec![0; 1],
+            // One per card that can be selected, which is the hand size.
+            deselect_card: vec![0; c.available_max],
         }
     }
 }
@@ -712,6 +752,7 @@ impl From<ActionSpace> for Vec<usize> {
             a.reroll,
             a.reroll_boss,
             a.apply_spectral,
+            a.deselect_card,
         ]
         .concat()
     }
@@ -763,8 +804,9 @@ mod tests {
         // + 5 sell_joker + 2 sell_consumable
         // + 2 buy_pack + 5 pick_pack_card + 1 skip_pack + 2 sort_hand + 1 reroll
         // + 1 apply_spectral + 1 reroll_boss = 111
-        assert_eq!(a.size(), 111);
-        assert_eq!(a.to_vec().len(), 111);
+        // 111 before the deselect bucket, plus one slot per card in the hand.
+        assert_eq!(a.size(), 135);
+        assert_eq!(a.to_vec().len(), 135);
     }
 
     #[test]

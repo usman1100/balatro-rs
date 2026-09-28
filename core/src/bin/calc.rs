@@ -39,10 +39,16 @@ fn main() {
         std::process::exit(1);
     }
 
-    let made = SelectHand::new(selected).best_hand().unwrap_or_else(|e| {
-        eprintln!("could not score selected cards: {e}");
-        std::process::exit(1);
-    });
+    // `best_hand_with`, not `best_hand`: the engine plays under whatever
+    // hand-shape rules the held jokers impose, and a score computed with the
+    // default rules can rank the cards differently and disagree with the
+    // engine.
+    let made = SelectHand::new(selected)
+        .best_hand_with(game.hand_rules())
+        .unwrap_or_else(|e| {
+            eprintln!("could not score selected cards: {e}");
+            std::process::exit(1);
+        });
 
     let (score, trace) = game.calc_score_traced(made);
 

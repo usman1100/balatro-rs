@@ -595,6 +595,29 @@ impl Game {
             });
     }
 
+    /// The mirror of `unmask_action_space_select_cards`: a selected card can
+    /// be released unless the Cerulean Bell pins it. Indexed by hand
+    /// position, to match `select_card`.
+    fn unmask_action_space_deselect_cards(&self, space: &mut ActionSpace) {
+        if !self.stage.is_blind() {
+            return;
+        }
+        let pinned = self.boss_state.forced_card;
+        self.available
+            .cards_and_selected()
+            .iter()
+            .enumerate()
+            .filter(|(_, (card, selected))| *selected && pinned != Some(card.id))
+            .for_each(|(i, _)| {
+                if space.unmask_deselect_card(i).is_err() {
+                    // A hand larger than `available_max`, which the space
+                    // cannot index. Selecting is bounded by the same limit,
+                    // so this is unreachable in practice.
+                    debug_assert!(false, "hand position {i} is outside the deselect bucket");
+                }
+            });
+    }
+
     fn unmask_action_space_play_and_discard(&self, space: &mut ActionSpace) {
         if !self.stage.is_blind() {
             return;
@@ -944,6 +967,7 @@ impl Game {
     pub fn gen_action_space(&self) -> ActionSpace {
         let mut space = ActionSpace::from(self.config.clone());
         self.unmask_action_space_select_cards(&mut space);
+        self.unmask_action_space_deselect_cards(&mut space);
         self.unmask_action_space_play_and_discard(&mut space);
         self.unmask_action_space_move_cards(&mut space);
         self.unmask_action_space_cash_out(&mut space);

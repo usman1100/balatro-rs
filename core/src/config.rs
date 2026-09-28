@@ -10,6 +10,10 @@ const DEFAULT_PLAYS: usize = 4;
 // double-counted.
 const DEFAULT_DISCARDS: usize = 3;
 const DEFAULT_MONEY_START: usize = 0;
+// Not enforced as a cap on the balance. The real game has no `money_max`:
+// nothing in its source clamps the dollars, and money only ever goes up
+// during a run. Kept as a field because the config and the python bindings
+// expose it, and because a save may carry it.
 const DEFAULT_MONEY_MAX: usize = 500;
 const DEFAULT_REWARD_BASE: usize = 0;
 const DEFAULT_MONEY_PER_HAND: usize = 1;
@@ -26,6 +30,8 @@ const DEFAULT_AVAILABLE: usize = 8;
 const DEFAULT_AVAILABLE_MAX: usize = 24; // arbitrary
 const DEFAULT_STORE_CONSUMABLE_SLOTS_MAX: usize = 4;
 const DEFAULT_DECK_MAX: usize = 100;
+// Likewise unenforced: the real game has no discard-pile cap, the pile is
+// bounded by the deck size anyway.
 const DEFAULT_DISCARDED_MAX: usize = 100;
 const DEFAULT_SELECTED_MAX: usize = 5;
 const DEFAULT_CONSUMABLE_SLOTS: usize = 2;
