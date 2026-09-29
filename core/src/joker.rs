@@ -3593,7 +3593,11 @@ mod tests {
     fn test_faceless_joker() {
         let j = Jokers::FacelessJoker(FacelessJoker::default());
 
-        let mut g = Game::default();
+        // A zero start isolates the payout under test from the balance.
+        let mut g = Game::new(Config {
+            money_start: 0,
+            ..Config::default()
+        });
         g.start();
         g.stage = Stage::Blind(Blind::Small);
         g.blind = Some(Blind::Small);
@@ -3619,7 +3623,11 @@ mod tests {
     fn test_faceless_joker_few_cards() {
         let j = Jokers::FacelessJoker(FacelessJoker::default());
 
-        let mut g = Game::default();
+        // A zero start isolates the payout under test from the balance.
+        let mut g = Game::new(Config {
+            money_start: 0,
+            ..Config::default()
+        });
         g.start();
         g.stage = Stage::Blind(Blind::Small);
         g.blind = Some(Blind::Small);

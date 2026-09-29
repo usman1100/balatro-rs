@@ -3139,6 +3139,27 @@ mod tests {
     use super::*;
     use crate::card::{Suit, Value};
 
+    /// The values the real game's `get_starting_params` sets, pinned
+    /// together because they are transcribed by hand and were wrong
+    /// independently of each other: a run started at $0 because only the
+    /// money line was miscopied, while hand size, hands and discards were
+    /// all correct. A group this small is worth one test rather than four,
+    /// so a transcription slip cannot hide behind three passing neighbours.
+    ///
+    /// $4 is not a rounding detail. $5 is the interest threshold, so a $0
+    /// start means ante 1 can never earn interest and no run reaches a shop
+    /// with a voucher affordable.
+    #[test]
+    fn test_starting_params_match_the_real_game() {
+        let mut g = Game::default();
+        assert_eq!(g.money, 4, "get_starting_params: dollars = 4");
+        assert_eq!(g.config.plays, 4, "the real base is four hands");
+        assert_eq!(g.config.discards, 3, "get_starting_params: discards = 3");
+        g.begin_round(Blind::Small);
+        assert_eq!(g.available.cards().len(), 8, "hand_size = 8");
+        assert_eq!(g.money, 4, "dealing the hand does not move the balance");
+    }
+
     #[test]
     fn test_real_rng_mode_matches_balatro_seed_reference() {
         use crate::pack::PackSize;
@@ -4433,7 +4454,11 @@ mod tests {
     #[test]
     fn test_enhancement_gold_held() {
         // Gold card held in unplayed hand gives $3 per hand scored
-        let mut g = Game::default();
+        // A zero start isolates the payout under test from the balance.
+        let mut g = Game::new(Config {
+            money_start: 0,
+            ..Config::default()
+        });
         let mut gold_card = Card::new(Value::Two, Suit::Heart);
         gold_card.enhancement = Some(Enhancement::Gold);
         g.available.extend(vec![gold_card]);
@@ -4446,7 +4471,11 @@ mod tests {
     #[test]
     fn test_seal_gold_scored() {
         // Gold Seal: $3 when this card is played and scores (score itself unaffected)
-        let mut g = Game::default();
+        // A zero start isolates the payout under test from the balance.
+        let mut g = Game::new(Config {
+            money_start: 0,
+            ..Config::default()
+        });
         let mut ace = Card::new(Value::Ace, Suit::Spade);
         ace.seal = Some(Seal::Gold);
         let hand = SelectHand::new(vec![ace]).best_hand().unwrap();
@@ -4469,7 +4498,11 @@ mod tests {
     fn test_seal_red_retrigger_gold_held() {
         // Red Seal retriggers held-card abilities too, not just played ones:
         // a held Gold+Red card earns $6 (2x $3), not $3.
-        let mut g = Game::default();
+        // A zero start isolates the payout under test from the balance.
+        let mut g = Game::new(Config {
+            money_start: 0,
+            ..Config::default()
+        });
         let mut gold_red = Card::new(Value::Two, Suit::Heart);
         gold_red.enhancement = Some(Enhancement::Gold);
         gold_red.seal = Some(Seal::Red);
@@ -6177,6 +6210,9 @@ mod tests {
     /// A game in the Shop with `tag` collected on the way in.
     fn game_in_shop_with_tag(tag: Tag) -> Game {
         let mut g = game_at_post_blind();
+        // Same reason as game_in_shop_with_tag_after: these assert on what a
+        // tag did or did not pay, so the balance has to start somewhere known.
+        g.money = 0;
         g.tags.push(tag);
         g.handle_action(Action::CashOut(0)).expect("cash out");
         g
@@ -6186,6 +6222,10 @@ mod tests {
     /// to establish the run counters the tag pays against.
     fn game_in_shop_with_tag_after(tag: Tag, setup: impl FnOnce(&mut Game)) -> Game {
         let mut g = game_at_post_blind();
+        // Zeroed before setup so a tag payout is the only thing under test.
+        // Set afterwards it would clobber the Economy cases, which set their
+        // own balances on purpose.
+        g.money = 0;
         setup(&mut g);
         g.tags.push(tag);
         g.handle_action(Action::CashOut(0)).expect("cash out");

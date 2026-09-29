@@ -9,7 +9,10 @@ const DEFAULT_PLAYS: usize = 4;
 // adds the fourth. Kept as the base so a deck's own modifier is not
 // double-counted.
 const DEFAULT_DISCARDS: usize = 3;
-const DEFAULT_MONEY_START: usize = 0;
+// The real game's `get_starting_params` base is $4. This is not a rounding
+// detail: $5 is the interest threshold, so a $0 start means ante 1 can never
+// earn interest and no run reaches the shop with a voucher affordable.
+const DEFAULT_MONEY_START: usize = 4;
 // Not enforced as a cap on the balance. The real game has no `money_max`:
 // nothing in its source clamps the dollars, and money only ever goes up
 // during a run. Kept as a field because the config and the python bindings
