@@ -3001,6 +3001,90 @@ impl Game {
     }
 }
 
+impl Game {
+    /// The full shop stock, priced, including anything the player cannot
+    /// currently afford.
+    ///
+    /// `gen_actions` only ever offers items that can be paid for, which is
+    /// the right contract for an action list but left the rest of the stock
+    /// invisible from both the CLI and any observation built on the state
+    /// dump. The real game shows the whole shelf and greys out what you
+    /// cannot buy, so the same goes here.
+    ///
+    /// Every cost goes through the same helper the matching `buy_*` uses, so
+    /// a price shown is a price charged — including the Coupon, the free
+    /// slots, a Rental joker's flat $1 and Telescope's discount.
+    fn fmt_shop(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.stage != Stage::Shop() {
+            return Ok(());
+        }
+        let balance = self.spendable_balance();
+        let line = |f: &mut fmt::Formatter, cost: usize, what: &str| -> fmt::Result {
+            write!(f, "  {what} — ${cost}")?;
+            if cost > balance {
+                write!(f, " (can't afford)")?;
+            }
+            Ok(())
+        };
+
+        if !self.shop.jokers.is_empty() {
+            writeln!(f, "shop jokers:")?;
+            for j in &self.shop.jokers {
+                let cost = self.joker_shop_price(j);
+                line(f, cost, &joker_display(j))?;
+                writeln!(f)?;
+            }
+        }
+        if !self.shop.consumables.is_empty() {
+            writeln!(f, "shop consumables:")?;
+            for c in &self.shop.consumables {
+                let cost = self.shop.price(|b| self.price(b), c.cost());
+                line(f, cost, c.name())?;
+                writeln!(f)?;
+            }
+        }
+        let vouchers: Vec<Voucher> = [self.shop.voucher, self.shop.voucher_tag_offer]
+            .into_iter()
+            .flatten()
+            .collect();
+        if !vouchers.is_empty() {
+            writeln!(f, "shop vouchers:")?;
+            for v in vouchers {
+                let cost = self.price(v.cost());
+                line(f, cost, v.name())?;
+                writeln!(f)?;
+            }
+        }
+        if !self.shop.packs.is_empty() {
+            writeln!(f, "shop packs:")?;
+            for p in &self.shop.packs {
+                let cost = self.shop.price(|b| self.price(b), p.cost());
+                line(f, cost, &p.name())?;
+                writeln!(f)?;
+            }
+        }
+        let reroll = self.reroll_cost;
+        line(f, reroll, "reroll")?;
+        writeln!(f)?;
+        Ok(())
+    }
+
+    /// What a shop joker costs right now, mirroring `buy_joker`: a Coupon or
+    /// a free slot makes it nothing, and a Rental joker is $1 regardless of
+    /// discounts.
+    fn joker_shop_price(&self, joker: &Jokers) -> usize {
+        let slot = self
+            .shop
+            .jokers
+            .iter()
+            .position(|j| j.instance_id() == joker.instance_id());
+        if self.shop.couponed || slot.is_some_and(|i| self.shop.free_joker_slots.contains(&i)) {
+            return 0;
+        }
+        self.joker_price(joker)
+    }
+}
+
 impl fmt::Display for Game {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let hand_str: String = self
@@ -3062,6 +3146,7 @@ impl fmt::Display for Game {
             writeln!(f, "vouchers: {}", names.join(", "))?;
         }
         writeln!(f, "planetarium: {}", self.planetarium)?;
+        self.fmt_shop(f)?;
         writeln!(f, "stage: {:?}", self.stage)?;
         writeln!(f, "ante: {:?}", self.ante_current)?;
         writeln!(f, "blind: {:?}", self.blind)?;
@@ -3138,6 +3223,90 @@ impl Game {
 mod tests {
     use super::*;
     use crate::card::{Suit, Value};
+
+    /// The shop has to be visible in full, including what cannot be bought.
+    ///
+    /// `gen_actions` only offers affordable items, which is the right
+    /// contract for an action list — two tests hold it to "every action
+    /// offered executes". But it meant the rest of the stock was invisible
+    /// from both the CLI and the state dump, so a player could not plan
+    /// towards a voucher they were saving for and an agent could not see the
+    /// shelf it was choosing from.
+    #[test]
+    fn test_shop_dump_shows_stock_the_player_cannot_afford() {
+        let mut g = Game::new(Config {
+            seed: Some(3),
+            ..Config::default()
+        });
+        g.start();
+        g.stage = Stage::Shop();
+        // $3, which the report's own transcript used.
+        g.money = 3;
+        let planetarium = g.planetarium.clone();
+        let vouchers = Vouchers::new();
+        let ctx = ShopContext::for_test(&planetarium, &vouchers, 1);
+        g.shop
+            .refresh(&ctx, &mut g.backend, &mut TagState::default());
+
+        let out = format!("{g}");
+        assert!(
+            out.contains("shop jokers:") || out.contains("shop consumables:"),
+            "the dump should list the shop:\n{out}"
+        );
+        // The reroll is $5 and the balance is $3, so it must appear and be
+        // marked. Before this the line did not exist at all.
+        assert!(out.contains("reroll — $5 (can't afford)"), "{out}");
+
+        // Everything in the shop is listed, affordable or not.
+        for j in &g.shop.jokers {
+            assert!(
+                out.contains(&joker_display(j)),
+                "shop joker {} is missing from the dump:\n{out}",
+                joker_display(j)
+            );
+        }
+        for c in &g.shop.consumables {
+            assert!(out.contains(c.name()), "consumable missing:\n{out}");
+        }
+    }
+
+    /// A price shown must be the price charged. The dump recomputes costs
+    /// rather than reading them off the action, so this checks the two agree
+    /// under a discount — the case where they could silently drift.
+    #[test]
+    fn test_shop_dump_prices_match_what_a_purchase_charges() {
+        let mut g = Game::new(Config {
+            seed: Some(5),
+            ..Config::default()
+        });
+        g.start();
+        g.stage = Stage::Shop();
+        g.money = 100;
+        g.vouchers.redeem(Voucher::ClearanceSale);
+        let planetarium = g.planetarium.clone();
+        let vouchers = g.vouchers.clone();
+        let ctx = ShopContext::for_test(&planetarium, &vouchers, 1);
+        g.shop
+            .refresh(&ctx, &mut g.backend, &mut TagState::default());
+
+        let out = format!("{g}");
+        let joker = g.shop.jokers.first().expect("a shop joker").clone();
+        let shown = format!(
+            "{} — ${}",
+            joker_display(&joker),
+            g.joker_shop_price(&joker)
+        );
+        assert!(out.contains(&shown), "expected `{shown}` in:\n{out}");
+
+        let before = g.money;
+        let charged = g.joker_shop_price(&joker);
+        g.buy_joker(joker).expect("buy");
+        assert_eq!(
+            before - g.money,
+            charged as i64,
+            "the price shown is not the price charged"
+        );
+    }
 
     /// The values the real game's `get_starting_params` sets, pinned
     /// together because they are transcribed by hand and were wrong
