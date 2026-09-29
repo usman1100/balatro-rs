@@ -107,12 +107,7 @@ pub(crate) trait RngBackend {
     /// A pack of a forced category and size, skipping the weighted
     /// `shop_pack{ante}` roll. The pack tags open these directly rather
     /// than through the shop.
-    fn gen_pack_of(
-        &mut self,
-        ctx: &ShopContext,
-        category: PackCategory,
-        size: PackSize,
-    ) -> Pack;
+    fn gen_pack_of(&mut self, ctx: &ShopContext, category: PackCategory, size: PackSize) -> Pack;
 
     /// This ante's voucher offer, drawn from the vouchers still
     /// offerable (see `Vouchers::offerable`). `None` once all 32 are
@@ -274,12 +269,7 @@ impl RngBackend for FastBackend {
         )
     }
 
-    fn gen_pack_of(
-        &mut self,
-        ctx: &ShopContext,
-        category: PackCategory,
-        size: PackSize,
-    ) -> Pack {
+    fn gen_pack_of(&mut self, ctx: &ShopContext, category: PackCategory, size: PackSize) -> Pack {
         self.pack_gen.gen_pack_of(
             ctx.planetarium,
             ctx.edition_prob_mult(),
@@ -369,7 +359,9 @@ impl RngBackend for FastBackend {
     }
 
     fn roll_random_spectral(&mut self, exclude: &[Spectral]) -> Consumable {
-        let all = Spectral::iter().filter(|s| !exclude.contains(s)).collect::<Vec<_>>();
+        let all = Spectral::iter()
+            .filter(|s| !exclude.contains(s))
+            .collect::<Vec<_>>();
         let pick = *all
             .choose(&mut self.rng)
             .expect("Spectral pool is never empty");
@@ -513,7 +505,7 @@ fn seed_joker_with_id(mut j: Jokers, rng: &mut impl Rng) -> Jokers {
 
 /// `Consumable` may carry Soul/Black Hole (a Spectral) even from a
 /// nominally Tarot/Planet draw.
-fn consumable_to_pack_content(c: Consumable) -> PackContent {
+pub(crate) fn consumable_to_pack_content(c: Consumable) -> PackContent {
     match c.kind {
         ConsumableKind::Tarot(t) => PackContent::Tarot(t),
         ConsumableKind::Planet(p) => PackContent::Planet(p),
@@ -575,12 +567,7 @@ impl RngBackend for RealBackend {
     // Calls the same per-category draw the weighted `gen_pack` path ends up
     // calling, so a tag-opened pack is indistinguishable from a bought one
     // in what the `Instance` consumes.
-    fn gen_pack_of(
-        &mut self,
-        ctx: &ShopContext,
-        category: PackCategory,
-        size: PackSize,
-    ) -> Pack {
+    fn gen_pack_of(&mut self, ctx: &ShopContext, category: PackCategory, size: PackSize) -> Pack {
         let ante = ctx.ante;
         let count = balatro_seed::pack_card_count(category, size);
         let contents = self.gen_pack_contents(ante, category, count);
@@ -815,12 +802,7 @@ impl RngBackend for Backend {
         }
     }
 
-    fn gen_pack_of(
-        &mut self,
-        ctx: &ShopContext,
-        category: PackCategory,
-        size: PackSize,
-    ) -> Pack {
+    fn gen_pack_of(&mut self, ctx: &ShopContext, category: PackCategory, size: PackSize) -> Pack {
         match self {
             Backend::Fast(b) => b.gen_pack_of(ctx, category, size),
             Backend::Real(b) => b.gen_pack_of(ctx, category, size),

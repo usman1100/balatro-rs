@@ -6,9 +6,10 @@ use crate::joker::{jokers_by_rarity, Jokers, Rarity};
 use crate::pack::{Pack, PackCategory, PackContent, PackSize};
 use crate::planet::{Planetarium, Planets};
 use crate::rank::HandRank;
-use crate::rng::{Backend, GeneratedItem, RngBackend};
-use crate::tarot::Tarot;
+use crate::rng::{consumable_to_pack_content, Backend, GeneratedItem, RngBackend};
+use crate::spectral::Spectral;
 use crate::tag::TagState;
+use crate::tarot::Tarot;
 use crate::voucher::{discounted, Voucher, Vouchers};
 use balatro_types::Stake;
 use rand::distributions::WeightedIndex;
@@ -44,10 +45,7 @@ impl ShopContext<'_> {
     /// Sticker rolls are per-ante in the real game (`etperpoll{ante}`), so
     /// this is only read where an ante is in hand.
     pub(crate) fn sticker_rolls(&self, rng: &mut impl Rng) -> (f64, f64) {
-        (
-            rng.gen::<f64>(),
-            rng.gen::<f64>(),
-        )
+        (rng.gen::<f64>(), rng.gen::<f64>())
     }
 
     pub(crate) fn pack_inputs(&self) -> PackInputs<'_> {
@@ -213,8 +211,7 @@ impl Shop {
         tags: &mut TagState,
     ) -> Jokers {
         if let Some(rarity) = tags.pending_free_joker.take() {
-            let joker =
-                backend.gen_joker_of_rarity(ctx.ante, ctx.edition_prob_mult(), &[], rarity);
+            let joker = backend.gen_joker_of_rarity(ctx.ante, ctx.edition_prob_mult(), &[], rarity);
             let slot = self.jokers.len();
             self.free_joker_slots.insert(slot);
             return joker;
@@ -696,6 +693,31 @@ impl ConsumableGenerator {
     pub(crate) fn gen_tarot_consumable(&self, exclude: &[Tarot], rng: &mut impl Rng) -> Consumable {
         Consumable::tarot(self.gen_tarot(exclude, rng))
     }
+
+    /// A spectral for pack generation. Rare variants never appear in packs,
+    /// so they are out of the pool regardless of `exclude`.
+    fn gen_spectral(&self, exclude: &[Spectral], rng: &mut impl Rng) -> Spectral {
+        let all: Vec<Spectral> = Spectral::iter().filter(|s| !s.is_rare()).collect();
+        let choices: Vec<_> = all.iter().filter(|s| !exclude.contains(s)).collect();
+        // A Mega pack wants more cards than the pool holds, so falling back to
+        // the full set duplicates rather than panicking. The real game gets
+        // the same effect from releasing its locks as the pack fills.
+        let choices = if choices.is_empty() {
+            all.iter().collect()
+        } else {
+            choices
+        };
+        let i = rng.gen_range(0..choices.len());
+        *choices[i]
+    }
+
+    pub(crate) fn gen_spectral_consumable(
+        &self,
+        exclude: &[Spectral],
+        rng: &mut impl Rng,
+    ) -> Consumable {
+        Consumable::spectral(self.gen_spectral(exclude, rng))
+    }
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -801,15 +823,32 @@ impl PackGenerator {
             // is a raw roll on the game's own `omen_globe` node, so it is
             // deliberately not scaled by `prob_mult` — real mode gets the
             // exact node from balatro-seed.
-            PackCategory::Arcana => (0..count)
-                .map(|_| {
-                    if omen_globe && rng.gen_ratio(1u32, 5u32) {
-                        PackContent::Spectral(crate::spectral::random_spectral(rng))
-                    } else {
-                        PackContent::Tarot(crate::tarot::random_tarot(rng))
-                    }
-                })
-                .collect(),
+            //
+            // `next_arcana_pack` locks each card as it is drawn, so a pack
+            // cannot repeat one. We were drawing with replacement instead.
+            PackCategory::Arcana => {
+                let mut tarots: Vec<Tarot> = Vec::new();
+                let mut spectrals: Vec<Spectral> = Vec::new();
+                (0..count)
+                    .map(|_| {
+                        let content = if omen_globe && rng.gen_ratio(1u32, 5u32) {
+                            consumable_to_pack_content(
+                                consumable_gen.gen_spectral_consumable(&spectrals, rng),
+                            )
+                        } else {
+                            consumable_to_pack_content(
+                                consumable_gen.gen_tarot_consumable(&tarots, rng),
+                            )
+                        };
+                        match content {
+                            PackContent::Tarot(t) => tarots.push(t),
+                            PackContent::Spectral(s) => spectrals.push(s),
+                            _ => unreachable!("an Arcana roll is a Tarot or a Spectral"),
+                        }
+                        content
+                    })
+                    .collect()
+            }
             PackCategory::Celestial => {
                 let mut exclude: Vec<Planets> = vec![];
                 (0..count)
@@ -835,9 +874,22 @@ impl PackGenerator {
                     PackContent::PlayingCard(gen_random_playing_card(prob_mult, rng, false, None))
                 })
                 .collect(),
-            PackCategory::Spectral => (0..count)
-                .map(|_| PackContent::Spectral(crate::spectral::random_spectral(rng)))
-                .collect(),
+            // `next_spectral_pack` locks each card as it is drawn, so a pack
+            // cannot repeat one.
+            PackCategory::Spectral => {
+                let mut seen: Vec<Spectral> = Vec::new();
+                (0..count)
+                    .map(|_| {
+                        let c = consumable_gen.gen_spectral_consumable(&seen, rng);
+                        let s = match c.kind {
+                            ConsumableKind::Spectral(s) => s,
+                            _ => unreachable!("gen_spectral_consumable returns a Spectral"),
+                        };
+                        seen.push(s);
+                        PackContent::Spectral(s)
+                    })
+                    .collect()
+            }
         }
     }
 }
@@ -850,6 +902,134 @@ mod tests {
 
     fn fast_backend() -> Backend {
         Backend::Fast(FastBackend::new(ChaCha8Rng::from_entropy()))
+    }
+
+    /// A Spectral pack cannot repeat a card. `next_spectral_pack` locks each
+    /// card as it draws it, and the Real backend still does — this was a
+    /// Fast/Real divergence, invisible in Real mode.
+    #[test]
+    fn test_spectral_packs_never_repeat_a_card() {
+        let mut rng = ChaCha8Rng::seed_from_u64(9);
+        let gen = PackGenerator {};
+        let planetarium = Planetarium::new();
+        let held = PackInputs {
+            jokers: &[],
+            omen_globe: false,
+        };
+        for size in [PackSize::Normal, PackSize::Jumbo, PackSize::Mega] {
+            for _ in 0..200 {
+                let contents = gen.gen_contents(
+                    &PackCategory::Spectral,
+                    balatro_seed::pack_card_count(PackCategory::Spectral, size) as usize,
+                    &planetarium,
+                    1,
+                    held,
+                    &mut rng,
+                );
+                let names: Vec<&str> = contents
+                    .iter()
+                    .map(|c| match c {
+                        PackContent::Spectral(s) => s.name(),
+                        _ => panic!("a Spectral pack holds Spectrals, got {c:?}"),
+                    })
+                    .collect();
+                let unique: std::collections::HashSet<&&str> = names.iter().collect();
+                assert_eq!(
+                    unique.len(),
+                    names.len(),
+                    "{size:?} Spectral pack repeated a card: {names:?}"
+                );
+            }
+        }
+    }
+
+    /// The same for Arcana, which is a Tarot roll with a Spectral substituted
+    /// per card under Omen Globe. Tracked as two pools, so a pack can hold
+    /// five of either kind without ever repeating one.
+    #[test]
+    fn test_arcana_packs_never_repeat_a_card() {
+        let mut rng = ChaCha8Rng::seed_from_u64(11);
+        let gen = PackGenerator {};
+        let planetarium = Planetarium::new();
+        for omen_globe in [false, true] {
+            let held = PackInputs {
+                jokers: &[],
+                omen_globe,
+            };
+            for size in [PackSize::Normal, PackSize::Jumbo, PackSize::Mega] {
+                for _ in 0..200 {
+                    let contents = gen.gen_contents(
+                        &PackCategory::Arcana,
+                        balatro_seed::pack_card_count(PackCategory::Spectral, size) as usize,
+                        &planetarium,
+                        1,
+                        held,
+                        &mut rng,
+                    );
+                    let mut tarots: Vec<&str> = Vec::new();
+                    let mut spectrals: Vec<&str> = Vec::new();
+                    for c in &contents {
+                        match c {
+                            PackContent::Tarot(t) => tarots.push(t.name()),
+                            PackContent::Spectral(s) => spectrals.push(s.name()),
+                            _ => panic!("an Arcana pack holds Tarots or Spectrals, got {c:?}"),
+                        }
+                    }
+                    for (kind, names) in [("Tarot", &tarots), ("Spectral", &spectrals)] {
+                        let unique: std::collections::HashSet<&&str> = names.iter().collect();
+                        assert_eq!(
+                            unique.len(),
+                            names.len(),
+                            "{size:?} Arcana pack repeated a {kind} (omen_globe={omen_globe}): {names:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Standard packs are the deliberate exception. `next_standard_pack` does
+    /// not lock, so a Standard pack really can contain two of the same card,
+    /// and "fixing" that would make Fast disagree with Real. Asserted so a
+    /// future blanket de-duplication of all five categories is caught.
+    #[test]
+    fn test_standard_packs_may_repeat_a_card() {
+        let mut rng = ChaCha8Rng::seed_from_u64(13);
+        let gen = PackGenerator {};
+        let planetarium = Planetarium::new();
+        let held = PackInputs {
+            jokers: &[],
+            omen_globe: false,
+        };
+        let mut saw_a_repeat = false;
+        for _ in 0..400 {
+            let contents = gen.gen_contents(
+                &PackCategory::Standard,
+                balatro_seed::pack_card_count(PackCategory::Standard, PackSize::Mega) as usize,
+                &planetarium,
+                1,
+                held,
+                &mut rng,
+            );
+            let mut keys: Vec<(Value, Suit)> = contents
+                .iter()
+                .map(|c| match c {
+                    PackContent::PlayingCard(c) => (c.value, c.suit),
+                    _ => panic!("a Standard pack holds playing cards, got {c:?}"),
+                })
+                .collect();
+            let before = keys.len();
+            keys.sort();
+            keys.dedup();
+            if keys.len() != before {
+                saw_a_repeat = true;
+                break;
+            }
+        }
+        assert!(
+            saw_a_repeat,
+            "Standard packs are drawn with replacement in the real game too"
+        );
     }
 
     #[test]
@@ -975,8 +1155,7 @@ mod tests {
                 },
                 &mut rand::thread_rng(),
             );
-            let expected_count =
-                balatro_seed::pack_card_count(pack.category, pack.size) as usize;
+            let expected_count = balatro_seed::pack_card_count(pack.category, pack.size) as usize;
             assert_eq!(pack.contents.len(), expected_count);
         }
     }
@@ -1001,8 +1180,7 @@ mod tests {
                 continue;
             }
             saw_spectral = true;
-            let expected_count =
-                balatro_seed::pack_card_count(pack.category, pack.size) as usize;
+            let expected_count = balatro_seed::pack_card_count(pack.category, pack.size) as usize;
             assert_eq!(pack.contents.len(), expected_count);
             for content in &pack.contents {
                 let PackContent::Spectral(s) = content else {
@@ -1011,7 +1189,10 @@ mod tests {
                 assert!(!s.is_rare(), "{s:?} should never appear in a normal draw");
             }
         }
-        assert!(saw_spectral, "expected at least one Spectral pack in 200 draws");
+        assert!(
+            saw_spectral,
+            "expected at least one Spectral pack in 200 draws"
+        );
     }
 
     #[test]
