@@ -1181,7 +1181,9 @@ impl Game {
     }
 
     /// The Hook: discards a number of random unplayed cards straight to
-    /// the discard pile, after the hand's own redraw.
+    /// the discard pile, after the hand's own redraw. The card leaves the
+    /// hand for good — the real game routes through
+    /// `discard_cards_from_highlighted`, which does not draw a replacement.
     fn boss_hook_discard(&mut self, n: usize) {
         let mut pool = self.available.not_selected().to_vec();
         for _ in 0..n {
@@ -1190,6 +1192,7 @@ impl Game {
             }
             let idx = self.backend.random_index(pool.len());
             let card = pool.remove(idx);
+            self.available.remove_by_id(card.id);
             self.discarded.push(card);
         }
     }
@@ -7502,6 +7505,36 @@ mod tests {
         select_and_play(&mut g, 3).expect("play");
         // The three played cards plus the two Hook discards.
         assert_eq!(g.discarded.len(), before + 5);
+    }
+
+    /// The Hook must take its cards *out* of the hand. It used to push them
+    /// to the discard pile without removing them, so every card it ate
+    /// existed in both places at once and the deck outgrew 52 within a run —
+    /// which breaks seeded reproducibility, not just the hand size.
+    #[test]
+    fn test_hook_removes_its_cards_from_the_hand() {
+        let mut g = game_in_boss_blind(BossBlind::Hook);
+        enter_boss_blind(&mut g);
+        let hand = g.available.cards().len();
+        select_and_play(&mut g, 3).expect("play");
+        // Playing three refills the hand to its full size, and only then does
+        // the Hook take two, so the hand ends up two short rather than
+        // three-and-two short.
+        assert_eq!(g.available.cards().len(), hand - 2);
+    }
+
+    /// The invariant the leak actually broke: every card is in exactly one
+    /// of hand, draw pile or discard pile, always.
+    #[test]
+    fn test_hook_keeps_the_deck_the_right_size() {
+        let mut g = game_in_boss_blind(BossBlind::Hook);
+        enter_boss_blind(&mut g);
+        let total = |g: &Game| {
+            g.available.cards().len() + g.deck.cards().len() + g.discarded.len()
+        };
+        let before = total(&g);
+        select_and_play(&mut g, 3).expect("play");
+        assert_eq!(total(&g), before, "The Hook duplicated two cards");
     }
 
     #[test]
