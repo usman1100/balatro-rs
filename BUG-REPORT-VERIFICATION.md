@@ -1,8 +1,10 @@
 # Verification of BALATRO-RS-BUG-REPORT.md
 
 Each claim was checked against the source rather than taken at face value.
-Verdict: **8 valid engine bugs, 1 valid-for-Fast-mode-only, 2 invalid, 1
-presentation preference.**
+Verdict: **5 valid engine bugs, 3 invalid, 4 presentation.**
+
+One of the three invalid was originally written up here as valid, on a
+misreading of the wiki; see item 3.
 
 The report itself is unusually careful — it separates "verified correct" from
 "not covered", and it was right about the scoring engine, which matters, since
@@ -11,6 +13,11 @@ that is the part everything else is downstream of.
 ---
 
 ## Valid, engine-level
+
+### Fixed so far
+
+1. The Hook card leak — fixed in b76a761.
+2. Starting money — fixed in 2e1c4c1.
 
 ### 1. Starting money is $0 — VALID, and it is a transcription error
 
@@ -41,21 +48,37 @@ The tester's reproduction is exactly right, including the observable
 consequence: duplicate playing cards in hand, and a deck that outgrows 52. This
 breaks seeded reproducibility, which is the project's stated goal.
 
-### 3. Celestial pack planets are destroyed — VALID
+### 3. Celestial pack planets are destroyed — INVALID, our behaviour is correct
 
-`pick_pack_card` (`core/src/game.rs:2436`) does:
+**Corrected on review.** I first wrote this up as valid, citing
+`game-docs/Planet_Cards.md:38`. That was a misreading and the citation does
+not support the claim.
 
-```rust
-PackContent::Planet(p) => {
-    self.planets_used_this_run += 1;
-    self.planetarium.level_up(p.hand_rank());
-}
-```
+The line says a planet "in the shop, or in your consumable slots, cannot also
+be in that shop's pack" — and its stated use is *generation*:
 
-The card levels the hand and is gone. The real game adds it to your
-consumable slots. `game-docs/Planet_Cards.md:38` is decisive: *"If a planet
-card is in the shop, or in your consumable slots, it cannot also be in that
-shop's pack."* A pack planet has to be able to end up in your slots.
+> This can be used to drammatically increase the odds of finding the planet
+> card in a pack you're looking for.
+
+That is a rule about which planets a pack may contain, and we implement it:
+`exclude_held` (`core/src/shop.rs:462`) drops every planet you are holding
+from the draw pool.
+
+What happens when you then *select* one is a different question, and the docs
+answer it directly. `Booster_Packs.md:16` says Celestial packs contain Planet
+Cards "**for immediate use**", and `:22` says "usually only one consumable
+option can be used, and the rest disappear after the player has used that
+card". The real game's pack definition carries `choose = 1`, so you pick one
+and it fires.
+
+That is what `pick_pack_card` (`core/src/game.rs:2437`) does: it levels the
+hand and discards the card. Both halves of the rule are correct. The report's
+premise — that a pack planet "can never enter your consumable slots" — is
+true of the real game too.
+
+The mistake worth recording: I treated a rule about *generation* as if it were
+a rule about *consumption*, because both sentences mention consumable slots.
+Checking the sentence's own example would have caught it.
 
 ### 4. Duplicate cards in packs — VALID for `Fast` mode only
 
