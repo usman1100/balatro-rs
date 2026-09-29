@@ -3146,6 +3146,19 @@ impl fmt::Display for Game {
             writeln!(f, "vouchers: {}", names.join(", "))?;
         }
         writeln!(f, "planetarium: {}", self.planetarium)?;
+        // A tag is drawn the moment a blind is skipped and fires at the
+        // cashout that follows, so between those two points it is held and
+        // nothing else reported it. Both sets are shown: `tags` is what the
+        // player is owed, `pending_tags` is what a Voucher or D6 granted
+        // that has not landed yet.
+        if !self.tags.is_empty() {
+            let names: Vec<&str> = self.tags.iter().map(|t| t.name()).collect();
+            writeln!(f, "tags (fire at cashout): {}", names.join(", "))?;
+        }
+        if !self.pending_tags.is_empty() {
+            let names: Vec<&str> = self.pending_tags.iter().map(|t| t.name()).collect();
+            writeln!(f, "tags (granted, not yet drawn): {}", names.join(", "))?;
+        }
         self.fmt_shop(f)?;
         writeln!(f, "stage: {:?}", self.stage)?;
         writeln!(f, "ante: {:?}", self.ante_current)?;
@@ -6042,6 +6055,62 @@ mod tests {
         let expected = g.small_blind_tag;
         g.skip_blind(Blind::Small).expect("skip small blind");
         assert_eq!(g.tags[0], expected);
+    }
+
+    /// A held tag has to be visible. It is drawn the moment a blind is
+    /// skipped and fires at the cashout after it, and the dump showed
+    /// nothing in between, so skipping a blind looked like it did nothing at
+    /// all. The tags are applied automatically, so there is no action to
+    /// offer — visibility is the only place they can be reported.
+    #[test]
+    fn test_held_tags_are_visible_before_they_fire() {
+        let mut g = Game::default();
+        g.start();
+        g.blind = Some(Blind::Small);
+        g.stage = Stage::PreBlind();
+        g.handle_action(Action::SkipBlind(Blind::Big)).expect("skip");
+
+        let tag = g.tags.first().expect("skipping grants a tag");
+        let name = tag.name();
+        let out = format!("{g}");
+        assert!(
+            out.contains(&format!("tags (fire at cashout): {name}")),
+            "a held tag should be reported by name, got:\n{out}"
+        );
+    }
+
+    /// The same for tags granted but not yet drawn, which arrive from a
+    /// Voucher or a D6 and sit in `pending_tags` until the next cashout.
+    #[test]
+    fn test_granted_tags_are_visible_before_they_are_drawn() {
+        let mut g = Game::default();
+        g.start();
+        g.pending_tags.push(Tag::Double);
+        let out = format!("{g}");
+        assert!(
+            out.contains(&format!("tags (granted, not yet drawn): {}", Tag::Double.name())),
+            "a granted tag should be reported by name, got:\n{out}"
+        );
+    }
+
+    /// A tag is spent, not kept: cashing out drains the held set.
+    #[test]
+    fn test_tags_are_consumed_by_cashout() {
+        let mut g = Game::default();
+        g.start();
+        g.blind = Some(Blind::Small);
+        g.stage = Stage::PreBlind();
+        g.handle_action(Action::SkipBlind(Blind::Big)).expect("skip");
+        assert!(!g.tags.is_empty());
+        g.cashout().expect("cash out");
+        assert!(
+            g.tags.is_empty(),
+            "tags fire at cashout rather than piling up"
+        );
+        assert!(
+            !format!("{g}").contains("tags (fire at cashout)"),
+            "a spent tag should no longer be reported"
+        );
     }
 
     #[test]
