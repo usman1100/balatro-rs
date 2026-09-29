@@ -5313,6 +5313,41 @@ mod tests {
         }
     }
 
+    /// The `hand:` line must show each card's enhancement, edition and seal.
+    ///
+    /// A bug report claimed the hand line was a bare rank and suit while the
+    /// deck line showed modifiers, making a Lucky card indistinguishable from
+    /// a plain one. Both lines go through `card_display`, so this pins it —
+    /// the claim was a misreading of a hand that happened to have no
+    /// modified cards, but the test is worth having either way since
+    /// readability of the state dump is what the whole report depended on.
+    #[test]
+    fn test_hand_display_shows_card_modifiers() {
+        let mut g = Game::default();
+        g.start();
+        g.begin_round(Blind::Small);
+        g.available.empty();
+
+        let mut gold = Card::new(Value::Five, Suit::Spade);
+        gold.enhancement = Some(Enhancement::Gold);
+        let mut foil = Card::new(Value::Seven, Suit::Heart);
+        foil.edition = Edition::Foil;
+        let mut sealed = Card::new(Value::King, Suit::Club);
+        sealed.seal = Some(Seal::Red);
+        let mut lucky = Card::new(Value::Nine, Suit::Diamond);
+        lucky.enhancement = Some(Enhancement::Lucky);
+        g.available.extend(vec![gold, foil, sealed, lucky]);
+
+        let out = format!("{g}");
+        let hand = out
+            .lines()
+            .find(|l| l.starts_with("hand:"))
+            .expect("the state dump has a hand line");
+        for want in ["[Gold]", "[Foil]", "[Red]", "[Lucky]"] {
+            assert!(hand.contains(want), "hand line is missing {want}: {hand}");
+        }
+    }
+
     /// A joker's accumulator and sell bonus are the state most likely to be
     /// lost in a round trip, so they are pinned directly rather than relying
     /// on a whole-run comparison.
