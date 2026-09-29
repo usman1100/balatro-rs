@@ -14,10 +14,13 @@ that is the part everything else is downstream of.
 
 ## Valid, engine-level
 
-### Fixed so far
+### All five fixed
 
-1. The Hook card leak — fixed in b76a761.
-2. Starting money — fixed in 2e1c4c1.
+1. The Hook card leak — b76a761.
+2. Starting money — 2e1c4c1.
+4. Duplicate Arcana and Spectral pack cards — ec2df77.
+10. Shop prices and unaffordable stock — 2ae6f8a.
+7. Held tags invisible — 5ec62b4.
 
 ### 1. Starting money is $0 — VALID, and it is a transcription error
 
@@ -80,7 +83,7 @@ The mistake worth recording: I treated a rule about *generation* as if it were
 a rule about *consumption*, because both sentences mention consumable slots.
 Checking the sentence's own example would have caught it.
 
-### 4. Duplicate cards in packs — VALID for `Fast` mode only
+### 4. Duplicate cards in packs — VALID for `Fast` mode only, but only half of it
 
 `gen_contents` draws with replacement in every category. The real backend
 does not: `next_spectral_pack` and friends call `self.lock(&item)` on each
@@ -107,7 +110,7 @@ report's "can never be triggered" is incorrect.
 So this is two separate issues: invisibility (valid) and the absence of player
 choice (a design decision, not a bug).
 
-### 10. The shop hides what you cannot afford — VALID
+### 10. The shop hides what you cannot afford — VALID, and worse than reported
 
 `gen_actions_buy_joker` passes `self.spendable_balance()` to
 `gen_moves_buy_joker`, which filters on affordability
@@ -115,8 +118,17 @@ choice (a design decision, not a bug).
 action list rather than listed-and-disabled. The tester's own check confirms
 the filter works — at $3 only the two $3 consumables appeared.
 
-This matters for the stated goal: an RL agent cannot see the shop it is
-choosing from, and a player cannot plan around what they cannot yet buy.
+Worse than reported, in fact: the state dump listed no shop stock *at
+all* — only owned jokers, consumables and vouchers. So an unaffordable
+item was unobservable everywhere, not just absent from the menu.
+
+Fixed by adding the whole priced shelf to the dump rather than by
+exposing unaffordable purchases as actions. `gen_actions` is contractually
+legal-only and two tests hold that every action it offers executes;
+`buy_joker` already rejects with `InvalidBalance`. Handing callers actions
+that routinely fail is a bad contract for an RL environment, where a
+policy picks from what it is offered. The real game shows the whole shelf
+and greys out what you cannot buy.
 
 ---
 
